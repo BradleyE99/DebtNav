@@ -1,5 +1,5 @@
 # Software Requirements Specification
-## Reroute: Student Debt Planner (working title)
+## DebtNav: Student Debt Planner
 
 | | |
 |---|---|
