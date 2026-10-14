@@ -1,10 +1,4 @@
-body { margin: 0; background: #f4f7fa; color: #14283d; font-family: system-ui, sans-serif; }
-main { max-width: 42rem; margin: 3rem auto; padding: 1.5rem; }
-form { display: grid; gap: .75rem; padding: 1.5rem; background: white; border: 1px solid #c1cbd5; border-radius: .75rem; }
-label { font-weight: 600; }
-input, button { box-sizing: border-box; min-width: 0; width: 100%; padding: .75rem; font: inherit; border: 1px solid #64748b; border-radius: .3rem; }
-button { background: #185b75; color: white; cursor: pointer; font-weight: 600; }
-:focus-visible { outline: 3px solid #976100; outline-offset: 3px; }
-[role="alert"] { margin: 0; color: #a31515; }
-li { padding: .5rem 0; }
-@media (max-width: 480px) { main { margin: 0; padding: 1rem; } form { padding: 1rem; } }
+/* Global base only; application styles live in src/ui/planner.css. */
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body { margin: 0; }
+button, input, select, textarea { font: inherit; }

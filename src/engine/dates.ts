@@ -3,7 +3,22 @@ export function validDate(value: unknown): value is string {
   const date = new Date(value + 'T00:00:00.000Z');
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+/** Memoized month sequences per anchor (projections ask for the same dates for every strategy,
+ * scenario and event impact). Bounded so long editing sessions cannot grow it without limit. */
+const monthCache = new Map<string, string[]>();
+const MONTH_CACHE_ANCHORS = 256;
+/** Calendar month addition anchored to the original day; month-end days clamp (Jan 31 + 1 → Feb 28/29). */
 export function addMonths(anchor: string, months: number): string {
+  if (!Number.isInteger(months) || months < 0 || months > 1200) return computeAddMonths(anchor, months);
+  let sequence = monthCache.get(anchor);
+  if (!sequence) {
+    if (monthCache.size >= MONTH_CACHE_ANCHORS) monthCache.clear();
+    sequence = [];
+    monthCache.set(anchor, sequence);
+  }
+  return sequence[months] ??= computeAddMonths(anchor, months);
+}
+function computeAddMonths(anchor: string, months: number): string {
   const date = new Date(anchor + 'T00:00:00.000Z');
   const target = new Date(date);
   target.setUTCDate(1);
@@ -14,5 +29,9 @@ export function addMonths(anchor: string, months: number): string {
   target.setUTCDate(Math.min(date.getUTCDate(), end.getUTCDate()));
   return target.toISOString().slice(0, 10);
 }
+/** Anniversary of `anchor` after `years` years (Feb 29 → Feb 28 in non-leap years). */
+export const addYears = (anchor: string, years: number): string => addMonths(anchor, years * 12);
+/** 'YYYY-MM' of an ISO date. */
+export const monthKey = (date: string): string => date.slice(0, 7);
 export const daysBetween = (start: string, end: string): number =>
   (Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z')) / 86400000;

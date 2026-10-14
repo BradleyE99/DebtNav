@@ -9,7 +9,7 @@ DebtNav is a student debt planner that connects two questions most tools treat s
 
 Enter your situation once. When something changes (a new job, a grant, a raise, a bonus), edit it, and every number updates instantly. Think of it as a GPS for student debt: it reroutes instead of making you start over.
 
-> **Status:** M1 engine core and a sample review panel are implemented locally for review. Existing initial plan setup (US-101) is preserved. Later milestones remain planned.
+> **Status:** Connected local planner implemented across borrowing, repayment, events, scenarios and persistence. Live external-data verification and human/browser checks remain outstanding; see the requirements checklist.
 
 ## Run locally
 
@@ -22,13 +22,13 @@ npm run dev
 
 Run `npm test` for acceptance tests and `npm run build` for type checking and the production build.
 
-The initial app implements [issue #1](https://github.com/BradleyE99/DebtNav/issues/1): create a plan, validate dates, and adjust school years when graduation changes. Each academic year begins on the school start date's anniversary; the final year ends at graduation. Graduation on an anniversary does not add an extra year. Same-day start and graduation create one year. February 29 anniversaries use February 28 in non-leap years. Retained years keep their data; removed years are discarded. Plans remain in memory for this issue; browser persistence is tracked separately as US-1001.
+The planner saves valid inputs and unfinished field text automatically in this browser. Results are derived locally. Academic years begin on the school start anniversary; the final year ends at graduation. February 29 anniversaries use February 28 in non-leap years.
 
 ## Why I'm building this
 
 I'm paying for college on my own. Every time my job hours, aid, or tuition changed, I had to redo the math to figure out how much to borrow and what it meant for life after graduation. I wanted one place that keeps the whole picture current.
 
-## Planned features
+## Features
 
 - **Borrowing gap per year:** costs minus grants, scholarships, job income, and savings.
 - **Accurate loan modeling:** subsidized vs. unsubsidized loans, in-school interest, capitalization at repayment.
@@ -72,12 +72,31 @@ DebtNav produces estimates for planning purposes only. It is not financial advic
 
 **Bradley J. Elder** · [GitHub](https://github.com/BradleyE99) · [LinkedIn](https://linkedin.com/in/bradleyjelder21) · [bradleyjelder.com](https://bradleyjelder.com)
 
-## M1 engine review
+## Using the connected planner
 
-The app includes a fixed-sample review panel for the M1 calculation engine. It shows in-school accrual, capitalization, minimum payments, complete combined/per-loan schedules, and non-amortizing warnings. Existing plan setup is preserved; the sample panel does not consume that setup form yet.
+Run `npm install` and `npm run dev`, then open the printed localhost URL. Node22.12+ is required.
 
-Shared types live in `src/engine/contracts.ts`; money and annual rates are decimal strings, dates are ISO calendar dates, and `calculateProjection(plan)` returns a validated result. Inputs remain separate from derived projections. The engine uses decimal.js and has no React dependencies. M1 registers an input-order strategy; avalanche and snowball remain M3 work.
+1. Edit school dates and grace; valid dates update academic years automatically.
+2. Add annual/semester costs and resources, including hourly job income. Edit any field directly; empty/invalid text stays visible while results keep the last valid model value.
+3. Create a loan from a year's gap or add loans manually. Edit rates, terms and interest settings.
+4. Enter a monthly debt budget, choose avalanche/snowball/custom, and reorder custom priorities by dragging or keyboard buttons.
+5. Add dated income, windfall, aid or expense events. Add scenarios and override assumptions; untouched values inherit base edits.
+6. Inspect live borrowing tables, repayment schedules, comparisons, chart/table and timeline. Reload to verify saved edits. Export/import a version2 JSON backup; deletion requires confirmation.
 
-Run `npm run lint:money`, `npm run test:coverage`, and `npm run build` to verify M1. Coverage enforces at least 90% engine lines. The focused money lint checks decimal aliases and string coercion/arithmetic in engine code.
+Plans and unfinished field text save automatically under `debtnav.plan.v2`. No projection is stored. Storage failure shows a notice and keeps the app usable. Unreadable stored data is preserved and automatic replacement pauses; export/import or confirmed deletion controls recovery. Older-version JSON is explicitly rejected without changing the current plan.
 
-See [M1 coordination plan](docs/M1-PLAN.md) for scope, interface ownership, and provisional calculation assumptions, and [independent review](docs/M1-REVIEW.md) for findings and verification limits. First payment is one month after repayment starts. Accrual uses actual days/365; total interest counts in-school interest once. Accessibility automation does not replace manual screen-reader or mobile visual review. No push, merge, deployment, or new CI workflow is part of this milestone.
+## Architecture and verification
+
+React forms use lead-owned shared contracts in `src/engine/planner-contracts.ts`, pure decimal calculations in `src/engine/`, validation/storage in `src/data/`, and UI in `src/ui/`. The tested M1 API and fixtures remain available but the mounted app uses actual plan inputs. Existing UTC date helpers are retained. A native SVG chart with a full equivalent table provides accessible comparisons without adding a chart dependency.
+
+`npm test` runs calculation, property, golden, editing, persistence and accessibility tests. `npm run test:coverage` enforces90% engine lines. `npm run test:bench` measures the four-year/eight-loan/360-month reference projection. `npm run lint:money` checks money rules. `npm run build` type-checks and builds.
+
+## Federal and College Scorecard context
+
+Federal reference data is versioned as of2026-10-12 in `src/policy/reference.ts`, sourced from [Federal Student Aid loan-limit guidance](https://fsapartners.ed.gov/sites/default/files/2026-05/FrequentlyAskedQuestionsLoanLimits.pdf) and [official RAP rules](https://edfinancial.studentaid.gov/income-driven-repaymentinformation-center/rap). The separate simplified RAP comparison assumes one borrower, fixed AGI, qualifying on-time payments and no spouse debt. It models current-interest subsidy, matching principal and potential360-payment forgiveness; it is not an eligibility decision or tax calculation. The standard projection uses editable SRS assumptions, clearly distinguished from policy.
+
+Optional Scorecard lookup sends only a public school name and requested data year. All debt-to-earnings arithmetic stays local. It uses the documented public DEMO_KEY, never a private credential; [api.data.gov](https://api.data.gov/docs/developer-manual/) limits demo access to30 requests/hour and50/day. Network/CORS/rate limits, suppressed earnings and unsupported responses produce an explicit unavailable state. Live API schema/browser access could not be verified in this environment.
+
+## Review status
+
+[Requirements checklist](docs/REQUIREMENTS-CHECKLIST.md) maps every story/NFR to implementation and evidence. [Independent review](docs/FULL-REVIEW.md) records findings and resolutions; [coordination plan](docs/IMPLEMENTATION-PLAN.md) records ownership. Real-browser clear/type/reload/download/import journey,360px visual inspection, contrast and screen-reader checks remain unperformed because no browser surface is available. Five-student usability testing needs human participants. No push, merge, deployment or CI success is claimed.

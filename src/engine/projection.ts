@@ -1,10 +1,24 @@
-import type { Plan, ProjectionResult, FieldError, LoanAtRepayment, InSchoolInterestPayment, AmortizationMonth, ProjectionWarning } from './contracts';
+import type { Plan, ProjectionResult, FieldError, LoanAtRepayment, InSchoolInterestPayment, AmortizationMonth, ProjectionWarning, LoanState, LoanPayment } from './contracts';
+import type Decimal from 'decimal.js';
 import { D, cents, money, moneyText, decimalText, sum } from './money';
 import { addMonths, daysBetween, validDate } from './dates';
+import type { PayoffStrategy, ISODate } from './contracts';
 import { getStrategy } from './strategies/registry';
 
 /** Pure M1 projection; all monetary arithmetic stays in decimal.js. */
-export function calculateProjection(plan: Plan): ProjectionResult {
+export interface ProjectionOptions {
+  /** Overrides the registry lookup of plan.repayment.strategyId. */
+  strategy?: PayoffStrategy;
+  /** Total cash available for debt in repayment month `month` (1-based) dated `date`. Replaces the
+   * sum of chosen payments + extraMonthlyPayment. Must be nonnegative and whole cents. */
+  monthlyBudget?: (date: ISODate, month: number) => Decimal;
+  capitalizeInterestByLoan?: Record<string, boolean>;
+  /** With monthlyBudget: first payment date (ISO) from which the budget never changes again. A
+   * non-amortizing month on or after it ends the projection; before it the projection continues.
+   * Omit when the budget may change until the horizon. */
+  budgetStableFrom?: ISODate;
+}
+export function calculateProjection(plan: Plan, options: ProjectionOptions = {}): ProjectionResult {
   const errors: FieldError[] = [];
   const error = (path: string, code: FieldError['code'], message: string) => errors.push({ path, code, message });
   const p = plan as Plan | undefined;
@@ -21,7 +35,7 @@ export function calculateProjection(plan: Plan): ProjectionResult {
   if (!moneyText(repayment?.extraMonthlyPayment)) error('repayment.extraMonthlyPayment', 'INVALID_MONEY', 'Enter nonnegative money with at most two decimal places.');
   const horizon = repayment?.maxMonths ?? 600;
   if (!Number.isInteger(horizon) || horizon < 1 || horizon > 1200) error('repayment.maxMonths', 'OUT_OF_RANGE', 'Horizon must be 1–1200 months.');
-  const strategy = getStrategy(repayment?.strategyId ?? '');
+  const strategy = options.strategy ?? getStrategy(repayment?.strategyId ?? '');
   if (!strategy) error('repayment.strategyId', 'UNKNOWN_STRATEGY', 'Unknown payoff strategy.');
   if (!Array.isArray(p?.loans)) error('loans', 'REQUIRED', 'Loans must be an array.');
   const ids = new Set<string>();
@@ -65,59 +79,170 @@ export function calculateProjection(plan: Plan): ProjectionResult {
       }
       accrued = paid;
     }
-    const capitalized = loan.payInterestWhileInSchool ? new D(0) : accrued;
+    const capitalized = loan.payInterestWhileInSchool || options.capitalizeInterestByLoan?.[loan.id] === false ? new D(0) : accrued;
     const balance = new D(loan.principal).plus(capitalized);
     const rate = new D(loan.annualRate).div(12);
     const minimum = rate.isZero() ? balance.div(loan.termMonths) : balance.times(rate).div(new D(1).minus(new D(1).plus(rate).pow(-loan.termMonths)));
     return { loanId: loan.id, originalPrincipal: money(loan.principal), accruedInterest: money(accrued), capitalizedInterest: money(capitalized), inSchoolInterestPaid: money(paid), balanceAtRepaymentStart: money(balance), minimumMonthlyPayment: money(minimum) };
   });
+  // ---------------------------------------------------------------- Repayment loop
+  // Performance (US-701/NFR-4): every per-loan constant is parsed once, paid-off loans drop out of
+  // the per-month work, and monthly/overall totals are accumulated as Decimals instead of being
+  // re-parsed from the formatted row strings. The arithmetic (and therefore every result) is the
+  // same as the straightforward formulation: interest = round half-up(balance × annual rate / 12).
+  const count = p.loans.length;
+  const zero = new D(0);
+  const unpaidInterest = loans.map(loan => new D(loan.accruedInterest).minus(loan.capitalizedInterest).minus(loan.inSchoolInterestPaid));
   const balances = loans.map(loan => new D(loan.balanceAtRepaymentStart));
-  const chosen = p.loans.map((loan, i) => new D(loan.monthlyPayment ?? loans[i].minimumMonthlyPayment));
+  const minimums = loans.map(loan => new D(loan.minimumMonthlyPayment));
+  const chosen = p.loans.map((loan, i) => loan.monthlyPayment === undefined ? minimums[i] : new D(loan.monthlyPayment));
   const budget = sum(chosen).plus(repayment.extraMonthlyPayment);
+  // Bound on the residual left at maturity purely by cent rounding: each month the payment and the
+  // interest are each rounded by at most half a cent, and each error compounds at the monthly rate.
+  // Payments at or above the computed minimum absorb that residual in the final installment, as a
+  // reference amortization calculator does (US-504). Payments below the computed minimum (by at most
+  // one cent) absorb at most $1, so deliberate underpayment never becomes a hidden balloon payment.
+  // Only needed in a loan's contractual final month, so it is computed lazily.
+  const roundingBound = (i: number): Decimal => {
+    const loan = p.loans[i];
+    const bound = new D(loan.termMonths).times('0.01').times(new D(1).plus(new D(loan.annualRate).div(12)).pow(loan.termMonths));
+    return chosen[i].gte(minimums[i]) ? bound : D.min('1.00', bound);
+  };
+  // Immutable per-loan values are parsed once, preserving multiply-then-divide rounding.
+  const annualRates = p.loans.map(loan => new D(loan.annualRate));
+  const nearMinimums = chosen.map((payment, i) => payment.gt(0) && payment.minus(minimums[i]).abs().lte('0.01'));
+  const separates = p.loans.map(loan => options.capitalizeInterestByLoan?.[loan.id] === false);
+  const loanIndexes = new Map(p.loans.map((loan, i) => [loan.id, i]));
   const schedule: AmortizationMonth[] = [];
   const warnings: ProjectionWarning[] = [];
+  const warnedLoans = new Set<number>();
+  // Loans with a positive balance, in input order. Balances never go negative, so a loan leaves
+  // this list exactly when its balance reaches zero.
+  let active: number[] = [];
+  for (let i = 0; i < count; i++) if (balances[i].gt(0)) active.push(i);
+  // Formatted balances, reused as the strategy input for the next month.
+  const balanceTexts = balances.map(balance => money(balance));
+  const interests: Decimal[] = new Array<Decimal>(count).fill(zero);
+  const dues: Decimal[] = new Array<Decimal>(count).fill(zero);
+  const payments: Decimal[] = new Array<Decimal>(count).fill(zero);
+  let totalScheduledInterest = zero;
+  let totalPayments = zero;
   let status: 'paidOff' | 'notAmortizing' | 'horizonExceeded' = 'paidOff';
-  for (let month = 1; balances.some(balance => balance.gt(0)) && month <= horizon; month++) {
+  for (let month = 1; active.length > 0 && month <= horizon; month++) {
     const date = addMonths(repaymentStartDate, month);
-    const interests = balances.map((balance, i) => cents(balance.times(p.loans[i].annualRate).div(12)));
-    const dues = balances.map((balance, i) => balance.plus(interests[i]));
-    const payments = dues.map((due, i) => D.min(due, chosen[i]));
-    let extra = budget.minus(sum(payments));
-    const states = p.loans.flatMap((loan, i) => balances[i].gt(0) ? [{ id: loan.id, balance: money(balances[i]), annualRate: loan.annualRate, minimumPayment: loans[i].minimumMonthlyPayment }] : []);
+    let interestTotal = zero;
+    let dueTotal = zero;
+    for (const i of active) {
+      const interest = cents(balances[i].times(annualRates[i]).div(TWELVE));
+      const due = unpaidInterest[i].isZero() ? balances[i].plus(interest) : balances[i].plus(interest).plus(unpaidInterest[i]);
+      interests[i] = interest;
+      dues[i] = due;
+      payments[i] = minOf(due, chosen[i]);
+      interestTotal = interestTotal.plus(interest);
+      dueTotal = dueTotal.plus(payments[i]);
+    }
+    const availableBudget = options.monthlyBudget ? options.monthlyBudget(date, month) : budget;
+    let allocated = dueTotal;
+    if (dueTotal.gt(availableBudget) && dueTotal.gt(0)) {
+      // Proportional shortfall allocation, with cent remainder assigned deterministically.
+      allocated = zero;
+      for (const i of active) { payments[i] = cents(payments[i].times(availableBudget).div(dueTotal)); allocated = allocated.plus(payments[i]); }
+      for (let k = active.length - 1; k >= 0 && allocated.gt(availableBudget); k--) {
+        const i = active[k];
+        const adjustment = minOf(payments[i], allocated.minus(availableBudget));
+        payments[i] = payments[i].minus(adjustment); allocated = allocated.minus(adjustment);
+      }
+    }
+    let extra = availableBudget.gt(allocated) ? availableBudget.minus(allocated) : zero;
+    const states: LoanState[] = active.map(i => Object.freeze({ id: p.loans[i].id, balance: balanceTexts[i], annualRate: p.loans[i].annualRate, minimumPayment: loans[i].minimumMonthlyPayment }));
     let ordered;
-    try { ordered = strategy.orderLoans(Object.freeze(states.map(state => Object.freeze({ ...state }))), date); }
+    try { ordered = strategy.orderLoans(Object.freeze(states), date); }
     catch { return { ok: false, errors: [{ path: 'repayment.strategyId', code: 'INVALID_STRATEGY', message: 'Strategy could not order the active loans.' }] }; }
-    if (!Array.isArray(ordered) || ordered.length !== states.length || ordered.some(loan => !loan || typeof loan.id !== 'string') || new Set(ordered.map(loan => loan.id)).size !== states.length || ordered.some(loan => !states.some(state => state.id === loan.id)))
+    if (!validOrder(ordered, states))
       return { ok: false, errors: [{ path: 'repayment.strategyId', code: 'INVALID_STRATEGY', message: 'Strategy must return every active loan exactly once.' }] };
     for (const target of ordered) {
-      const i = p.loans.findIndex(loan => loan.id === target.id);
-      const amount = D.min(extra, dues[i].minus(payments[i]));
+      if (extra.isZero()) break;
+      const i = loanIndexes.get(target.id)!;
+      const amount = minOf(extra, dues[i].minus(payments[i]));
       payments[i] = payments[i].plus(amount); extra = extra.minus(amount);
     }
     // Absorb only a small rounded-payment remainder at the contractual last installment.
-    for (let i = 0; i < balances.length; i++) {
-      const remainder = dues[i].minus(payments[i]);
-      const nearMinimum = chosen[i].gt(0) && chosen[i].minus(loans[i].minimumMonthlyPayment).abs().lte('0.01');
-      // Compounded rounding errors can exceed n * half a cent at positive rates.
-      // Provisional M1 policy: at most $1 extra in the nominal final transaction.
+    for (const i of active) {
+      if (month !== p.loans[i].termMonths || !nearMinimums[i]) continue;
       // Larger residuals keep amortizing; this adjusts cash paid and never forgives debt.
-      const roundingBound = D.min('1.00', new D(p.loans[i].termMonths).times('0.005').times(new D(1).plus(new D(p.loans[i].annualRate).div(12)).pow(p.loans[i].termMonths)));
-      if (nearMinimum && month === p.loans[i].termMonths && remainder.gt(0) && remainder.lte(roundingBound)) payments[i] = dues[i];
+      const remainder = dues[i].minus(payments[i]);
+      if ((!options.monthlyBudget || payments[i].gte(chosen[i])) && remainder.gt(0) && remainder.lte(roundingBound(i))) payments[i] = dues[i];
     }
-    for (let i = 0; i < balances.length; i++) if (balances[i].gt(0) && payments[i].lte(interests[i])) {
-      warnings.push({ code: payments[i].lt(interests[i]) ? 'NEGATIVE_AMORTIZATION' : 'NON_AMORTIZING', loanId: p.loans[i].id, date, message: 'Payment does not reduce this loan balance; no debt-free date is projected.' });
+    // US-505: the plan stops amortizing when this month's total payment does not exceed this
+    // month's total interest (total debt cannot fall). A single loan underpaid inside a shortfall
+    // month is not enough: the total still falls and freed budget reaches it later. While the
+    // budget can still change (future life events), the projection continues and only warns.
+    let paymentTotal = zero;
+    for (const i of active) paymentTotal = paymentTotal.plus(payments[i]);
+    let stopProjection = false;
+    if (paymentTotal.lte(interestTotal)) {
+      stopProjection = !options.monthlyBudget || (options.budgetStableFrom !== undefined && date >= options.budgetStableFrom);
+      for (const i of active) {
+        if (!payments[i].lte(interests[i]) || warnedLoans.has(i)) continue;
+        warnedLoans.add(i);
+        warnings.push({
+          code: payments[i].lt(interests[i]) ? 'NEGATIVE_AMORTIZATION' : 'NON_AMORTIZING', loanId: p.loans[i].id, date,
+          message: stopProjection
+            ? 'Payment does not reduce this loan balance; no debt-free date is projected.'
+            : 'Payments this month do not cover the interest, so the balance grows until payments increase.',
+        });
+      }
     }
-    const rows = p.loans.flatMap((loan, i) => {
-      if (balances[i].isZero()) return [];
-      const principal = payments[i].minus(interests[i]);
-      balances[i] = dues[i].minus(payments[i]);
-      return [{ loanId: loan.id, payment: money(payments[i]), interest: money(interests[i]), principal: money(principal), remainingBalance: money(balances[i]) }];
-    });
-    schedule.push({ month, date, loans: rows, payment: money(sum(rows.map(row => row.payment))), interest: money(sum(rows.map(row => row.interest))), principal: money(sum(rows.map(row => row.principal))), remainingBalance: money(sum(balances)) });
-    if (warnings.length) { status = 'notAmortizing'; break; }
+    const rows: LoanPayment[] = [];
+    let rowInterest = zero;
+    let rowPrincipal = zero;
+    let remaining = zero;
+    let paidOff = false;
+    for (const i of active) {
+      const separateInterest = separates[i];
+      const interestDue = separateInterest ? interests[i].plus(unpaidInterest[i]) : interests[i];
+      const paidInterest = separateInterest ? minOf(payments[i], interestDue) : interests[i];
+      unpaidInterest[i] = separateInterest ? interestDue.minus(paidInterest) : zero;
+      const principal = payments[i].minus(paidInterest);
+      balances[i] = balances[i].minus(principal);
+      // Negative amortization remains visible as combined balance, without charging interest on uncapitalized interest.
+      const owed = separateInterest ? balances[i].plus(unpaidInterest[i]) : balances[i];
+      const owedText = money(owed);
+      balanceTexts[i] = separateInterest ? money(balances[i]) : owedText;
+      rows.push({ loanId: p.loans[i].id, payment: money(payments[i]), interest: money(paidInterest), principal: money(principal), remainingBalance: owedText });
+      rowInterest = rowInterest.plus(paidInterest);
+      rowPrincipal = rowPrincipal.plus(principal);
+      remaining = remaining.plus(owed);
+      if (!balances[i].gt(0)) paidOff = true;
+    }
+    if (paidOff) active = active.filter(i => balances[i].gt(0));
+    totalScheduledInterest = totalScheduledInterest.plus(rowInterest);
+    totalPayments = totalPayments.plus(paymentTotal);
+    schedule.push({ month, date, loans: rows, payment: money(paymentTotal), interest: money(rowInterest), principal: money(rowPrincipal), remainingBalance: money(remaining) });
+    if (stopProjection) { status = 'notAmortizing'; break; }
   }
-  if (status === 'paidOff' && balances.some(balance => balance.gt(0))) {
+  if (status === 'paidOff' && active.length > 0) {
     status = 'horizonExceeded'; warnings.push({ code: 'HORIZON_EXCEEDED', message: 'Debt remains at the projection horizon.' });
   }
-  return { ok: true, value: { status, repaymentStartDate, firstPaymentDate: addMonths(repaymentStartDate, 1), loans, balanceAtRepaymentStart: money(sum(loans.map(loan => loan.balanceAtRepaymentStart))), inSchoolInterestPayments, amortizationSchedule: schedule, debtFreeDate: status === 'paidOff' ? schedule.at(-1)?.date ?? repaymentStartDate : null, totalInterestPaid: status === 'paidOff' ? money(sum(loans.map(loan => loan.accruedInterest)).plus(sum(schedule.map(row => row.interest)))) : null, totalRepaymentPayments: money(sum(schedule.map(row => row.payment))), warnings } };
+  const totalInterestPaid = status === 'paidOff'
+    ? money(sum(loans.map(loan => options.capitalizeInterestByLoan?.[loan.loanId] === false ? new D(loan.capitalizedInterest).plus(loan.inSchoolInterestPaid) : loan.accruedInterest)).plus(totalScheduledInterest))
+    : null;
+  return { ok: true, value: { status, repaymentStartDate, firstPaymentDate: addMonths(repaymentStartDate, 1), loans, balanceAtRepaymentStart: money(sum(loans.map(loan => loan.balanceAtRepaymentStart))), inSchoolInterestPayments, amortizationSchedule: schedule, debtFreeDate: status === 'paidOff' ? schedule.at(-1)?.date ?? repaymentStartDate : null, totalInterestPaid, totalRepaymentPayments: money(totalPayments), warnings } };
+}
+
+const TWELVE = new D(12);
+/** The smaller of two values (same value as D.min, without copying both arguments). */
+const minOf = (a: Decimal, b: Decimal): Decimal => (b.lt(a) ? b : a);
+
+/** A strategy result must contain every active loan exactly once (US-605 boundary check). */
+function validOrder(ordered: unknown, states: readonly LoanState[]): ordered is readonly LoanState[] {
+  if (!Array.isArray(ordered) || ordered.length !== states.length) return false;
+  const expected = new Set(states.map(state => state.id));
+  const seen = new Set<string>();
+  for (const loan of ordered as unknown[]) {
+    const id = (loan as LoanState | null)?.id;
+    if (!loan || typeof id !== 'string' || !expected.has(id) || seen.has(id)) return false;
+    seen.add(id);
+  }
+  return true;
 }

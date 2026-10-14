@@ -45,4 +45,24 @@ describe('plan setup', () => {
   it('clamps leap-day anniversaries without drifting', () => {
     expect(valid('2024-02-29','2028-03-01').schoolYears.map(y=>y.startDate)).toEqual(['2024-02-29','2025-02-28','2026-02-28','2027-02-28','2028-02-29']);
   });
+  it('matches years by position: a shifted start date keeps ids and data (US-101)', () => {
+    const initial = valid('2026-08-24', '2030-05-15');
+    initial.schoolYears[2].costItems.push({ label: 'Tuition', amount: '12000.00' });
+    const ids = initial.schoolYears.map(year => year.id);
+    const shifted = valid('2026-08-25', '2030-05-15', initial);
+    expect(shifted.schoolYears.map(year => year.id)).toEqual(ids);
+    expect(shifted.schoolYears.map(year => year.startDate)).toEqual(['2026-08-25', '2027-08-25', '2028-08-25', '2029-08-25']);
+    expect(shifted.schoolYears[2].costItems).toEqual([{ label: 'Tuition', amount: '12000.00' }]);
+  });
+  it('gives new trailing years deterministic unique ids and keeps legacy date-shaped ids', () => {
+    const legacy: Plan = { settings: { startDate: '2026-08-24', graduationDate: '2027-05-15' }, schoolYears: [
+      { id: '2026-08-24', startDate: '2026-08-24', endDate: '2027-05-15', costItems: [{ amount: '1.00' }], resources: [] },
+    ] };
+    const extended = valid('2026-08-24', '2028-05-15', legacy);
+    expect(extended.schoolYears.map(year => year.id)).toEqual(['2026-08-24', 'year-2']);
+    expect(extended.schoolYears[0].costItems).toHaveLength(1);
+    const clash: Plan = { ...legacy, schoolYears: [{ ...legacy.schoolYears[0], id: 'year-2' }] };
+    expect(valid('2026-08-24', '2029-05-15', clash).schoolYears.map(year => year.id)).toEqual(['year-2', 'year-2-2', 'year-3']);
+    expect(valid('2026-08-24', '2029-05-15', clash)).toEqual(valid('2026-08-24', '2029-05-15', clash));
+  });
 });
