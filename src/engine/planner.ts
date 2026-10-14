@@ -1,7 +1,7 @@
 import type Decimal from 'decimal.js';
 import type {
   PlannerPlan, PlannerYear, PlannerLoan, PlannerResult, PlannerComparisons, Scenario, Comparison, YearSummary,
-  TimelineEntry, FieldError, EventImpact, LifeEvent, Resource, Result,
+  TimelineEntry, FieldError, EventImpact, LifeEvent, Resource, Result, PlannerProjection, Money,
 } from './planner-contracts';
 import type { Projection } from './contracts';
 import { D, cents, money, sum, decimalText, moneyText } from './money';
@@ -279,6 +279,13 @@ const failure = (): { ok: false; errors: FieldError[] } =>
  * never by object identity: a plan mutated in place gets a new key. Results are treated as
  * immutable by callers. The memo is small and bounded.
  */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
 const baseMemo = new Map<string, Result<Projection>>();
 const BASE_MEMO_SIZE = 8;
 function baseRepayment(plan: PlannerPlan): Result<Projection> {
@@ -286,48 +293,83 @@ function baseRepayment(plan: PlannerPlan): Result<Projection> {
   const cached = baseMemo.get(key);
   if (cached) return cached;
   const errors = validatePlannerInputs(plan);
-  const result: Result<Projection> = errors.length ? { ok: false, errors } : repaymentFor(plan);
+  // Cached results are shared between callers, so they are deep-frozen: an accidental in-place
+  // .sort()/.reverse() by a caller throws instead of silently corrupting later results.
+  const result: Result<Projection> = deepFreeze(errors.length ? { ok: false, errors } : repaymentFor(plan));
   if (baseMemo.size >= BASE_MEMO_SIZE) baseMemo.delete(baseMemo.keys().next().value!);
   baseMemo.set(key, result);
   return result;
 }
 
-function buildTimeline(plan: PlannerPlan, repayment: Projection): TimelineEntry[] {
+function buildTimeline(plan: PlannerPlan, repayment: Projection | null): TimelineEntry[] {
+  const repaymentStart = repayment?.repaymentStartDate ?? addMonths(plan.settings.graduationDate, plan.settings.graceMonths);
   const timeline: TimelineEntry[] = [
     ...plan.schoolYears.map((year, index) => ({ id: year.id, date: year.startDate, label: `School year ${index + 1}`, type: 'school' as const })),
     { id: 'graduation', date: plan.settings.graduationDate, label: 'Graduation', type: 'graduation' },
-    { id: 'repayment', date: repayment.repaymentStartDate, label: 'Repayment begins', type: 'repayment' },
+    ...(validDate(repaymentStart) ? [{ id: 'repayment', date: repaymentStart, label: 'Repayment begins', type: 'repayment' as const }] : []),
     ...plan.lifeEvents.map(event => ({
       id: event.id, date: event.date, label: event.recurrence === 'yearly' ? `${event.name} (yearly)` : event.name, type: 'event' as const,
     })),
   ];
   const names = new Map(plan.loans.map(loan => [loan.id, loan.name]));
   const paid = new Set<string>();
-  for (const row of repayment.amortizationSchedule) {
+  for (const row of repayment?.amortizationSchedule ?? []) {
     for (const loan of row.loans) {
       if (paid.has(loan.loanId) || !new D(loan.remainingBalance).isZero()) continue;
       paid.add(loan.loanId);
       timeline.push({ id: `payoff-${loan.loanId}`, date: row.date, label: `${names.get(loan.loanId) ?? loan.loanId} paid off`, type: 'payoff' });
     }
   }
-  if (repayment.debtFreeDate) timeline.push({ id: 'debt-free', date: repayment.debtFreeDate, label: 'Debt free', type: 'payoff' });
+  if (repayment?.debtFreeDate) timeline.push({ id: 'debt-free', date: repayment.debtFreeDate, label: 'Debt free', type: 'payoff' });
   // Array.prototype.sort is stable, so same-day entries keep the order above.
   return timeline.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-/** Core outputs (US-701: recomputed on every edit, < 100 ms for the reference plan). */
-export function calculatePlannerProjection(plan: PlannerPlan): PlannerResult {
+/**
+ * Additive extensions to the shared contract (proposed for planner-contracts.ts; all existing
+ * shapes are unchanged). When the plan is valid but repayment cannot be projected (for example a
+ * loan disbursed after repayment starts), borrowing-phase results are still available.
+ */
+export interface RepaymentUnavailable { errors: FieldError[]; reason: string }
+export interface PlannerOutputs extends Omit<PlannerProjection, 'repayment' | 'minimumTotal' | 'paymentShortfall'> {
+  /** Null when repayment cannot be projected; see repaymentUnavailable. */
+  repayment: Projection | null;
+  minimumTotal: Money | null;
+  paymentShortfall: Money | null;
+  repaymentUnavailable: RepaymentUnavailable | null;
+}
+/** A scenario whose plan cannot be projected; listed instead of silently dropped (US-802). */
+export interface ScenarioFailure { id: string; name: string; errors: FieldError[]; reason: string }
+export interface PlannerComparisonsDetailed extends PlannerComparisons { scenarioFailures: ScenarioFailure[] }
+
+const reasonOf = (errors: readonly FieldError[]) => errors.map(error => error.message).join(' ');
+
+/**
+ * Core outputs with partial results (US-304, US-701, US-902). Fails only when planner inputs are
+ * invalid; a repayment problem still returns the year summaries and timeline, with repayment null.
+ */
+export function calculatePlannerOutputs(plan: PlannerPlan): Result<PlannerOutputs> {
   try {
-    const base = baseRepayment(plan);
-    if (!base.ok) return base;
-    const repayment = base.value;
+    const plannerErrors = validatePlannerInputs(plan);
+    if (plannerErrors.length) return { ok: false, errors: plannerErrors };
     const years = plan.schoolYears.map((year, index) => summarizeYear(plan, year, index));
-    const minimumTotal = sum(repayment.loans.map(loan => loan.minimumMonthlyPayment));
-    const budget = new D(plan.postGradIncome.monthlyDebtBudget).plus(plan.repayment.extraMonthlyPayment);
+    const base = baseRepayment(plan);
     const notices: string[] = [];
     if (plan.repayment.mode === 'federal') {
       notices.push('The amortization schedule below is the standard repayment model. Federal repayment estimates are shown separately.');
     }
+    if (!base.ok) {
+      return {
+        ok: true,
+        value: {
+          repayment: null, years, minimumTotal: null, paymentShortfall: null, timeline: buildTimeline(plan, null), notices,
+          repaymentUnavailable: { errors: [...base.errors], reason: reasonOf(base.errors) },
+        },
+      };
+    }
+    const repayment = base.value;
+    const minimumTotal = sum(repayment.loans.map(loan => loan.minimumMonthlyPayment));
+    const budget = new D(plan.postGradIncome.monthlyDebtBudget).plus(plan.repayment.extraMonthlyPayment);
     if (plan.lifeEvents.some(event => event.type === 'windfall' && monthKey(event.date) < monthKey(repayment.firstPaymentDate))) {
       notices.push('Windfalls dated before repayment starts are assumed to be saved and applied in the first repayment month.');
     }
@@ -341,6 +383,7 @@ export function calculatePlannerProjection(plan: PlannerPlan): PlannerResult {
         paymentShortfall: money(D.max(0, minimumTotal.minus(budget))),
         timeline: buildTimeline(plan, repayment),
         notices,
+        repaymentUnavailable: null,
       },
     };
   } catch {
@@ -348,10 +391,22 @@ export function calculatePlannerProjection(plan: PlannerPlan): PlannerResult {
   }
 }
 
+/**
+ * Core outputs in the contract shape (US-701: recomputed on every edit). Fails when repayment
+ * cannot be projected; use calculatePlannerOutputs to keep the borrowing-phase results.
+ */
+export function calculatePlannerProjection(plan: PlannerPlan): PlannerResult {
+  const result = calculatePlannerOutputs(plan);
+  if (!result.ok) return result;
+  const { repayment, years, minimumTotal, paymentShortfall, timeline, notices, repaymentUnavailable } = result.value;
+  if (!repayment || minimumTotal === null || paymentShortfall === null) return { ok: false, errors: repaymentUnavailable?.errors ?? failure().errors };
+  return { ok: true, value: { repayment, years, minimumTotal, paymentShortfall, timeline, notices } };
+}
+
 const monthsOf = (projection: Projection) => projection.amortizationSchedule.length;
 
 /** Secondary outputs: strategy and scenario comparisons, life-event impacts, and the scenario range. */
-export function calculatePlannerComparisons(plan: PlannerPlan): Result<PlannerComparisons> {
+export function calculatePlannerComparisons(plan: PlannerPlan): Result<PlannerComparisonsDetailed> {
   try {
     const base = baseRepayment(plan);
     if (!base.ok) return base;
@@ -378,11 +433,16 @@ export function calculatePlannerComparisons(plan: PlannerPlan): Result<PlannerCo
       }
     }
 
-    // US-802: scenarios relative to the base plan; invalid scenario plans are skipped.
+    // US-802: scenarios relative to the base plan. Scenarios that cannot be projected are reported
+    // in scenarioFailures, with the reason, instead of disappearing.
     const scenarioComparisons: Comparison[] = [];
+    const scenarioFailures: ScenarioFailure[] = [];
     for (const scenario of plan.scenarios) {
       const result = baseRepayment(applyScenario(plan, scenario));
-      if (!result.ok) continue;
+      if (!result.ok) {
+        scenarioFailures.push({ id: scenario.id, name: scenario.name, errors: [...result.errors], reason: reasonOf(result.errors) });
+        continue;
+      }
       const projection = result.value;
       const bothPaid = projection.totalInterestPaid !== null && baseProjection.totalInterestPaid !== null;
       scenarioComparisons.push({
@@ -392,12 +452,13 @@ export function calculatePlannerComparisons(plan: PlannerPlan): Result<PlannerCo
       });
     }
 
-    // Range over base + scenarios. `latest` is null when any of them has no projected debt-free date.
+    // Range over base + scenarios. `latest` is null when any of them has no projected debt-free date
+    // or cannot be projected at all (a bounded range would understate the uncertainty).
     const projections = [baseProjection, ...scenarioComparisons.map(item => item.projection)];
     const dates = projections.map(item => item.debtFreeDate).filter((date): date is string => date !== null).sort();
     const scenarioRange = {
       earliest: dates[0] ?? null,
-      latest: dates.length === projections.length ? dates[dates.length - 1] : null,
+      latest: dates.length === projections.length && !scenarioFailures.length ? dates[dates.length - 1] : null,
     };
 
     // US-703: impact = base plan without the event minus base plan (positive = event helps).
@@ -411,7 +472,7 @@ export function calculatePlannerComparisons(plan: PlannerPlan): Result<PlannerCo
       };
     });
 
-    return { ok: true, value: { strategyComparisons, scenarioComparisons, eventImpacts, scenarioRange } };
+    return { ok: true, value: { strategyComparisons, scenarioComparisons, scenarioFailures, eventImpacts, scenarioRange } };
   } catch {
     return failure();
   }

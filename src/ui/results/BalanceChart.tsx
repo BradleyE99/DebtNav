@@ -1,6 +1,7 @@
 import { useState, type MouseEvent } from 'react';
 import type { Projection } from '../../engine/planner-contracts';
 import { usePlanner } from '../PlannerContext';
+import { projectable } from './comparison';
 import { Explain, TableRegion } from '../common/common';
 import { formatCurrency, strategyName } from '../format';
 
@@ -42,13 +43,14 @@ export function BalanceChart() {
   const { plan, projection, comparisons } = usePlanner();
   const [mode, setMode] = useState<'strategy' | 'scenario'>('strategy');
   const [hoverMonth, setHoverMonth] = useState<number | null>(null);
-  if (!projection || !comparisons) return null;
+  const baseRepayment = projection?.repayment;
+  if (!projection || !baseRepayment || !comparisons) return null;
 
   const effectiveMode = mode === 'scenario' && plan.scenarios.length === 0 ? 'strategy' : mode;
   const lines: Line[] = effectiveMode === 'strategy'
     ? comparisons.strategyComparisons.map(item => ({ key: item.id, name: strategyName(item.id), projection: item.projection }))
-    : [{ key: 'base', name: 'Base plan', projection: projection.repayment },
-      ...comparisons.scenarioComparisons.map(item => ({ key: item.id, name: item.name, projection: item.projection }))];
+    : [{ key: 'base', name: 'Base plan', projection: baseRepayment },
+      ...comparisons.scenarioComparisons.filter(projectable).map(item => ({ key: item.id, name: item.name, projection: item.projection }))];
   const charted = lines.slice(0, SERIES.length);
   const months = Math.max(1, ...charted.map(line => line.projection.amortizationSchedule.length));
   const maxBalance = niceMax(Math.max(0, ...charted.flatMap(line => [toNumber(line.projection.balanceAtRepaymentStart), ...line.projection.amortizationSchedule.map(row => toNumber(row.remainingBalance))])));
@@ -65,7 +67,7 @@ export function BalanceChart() {
     setHoverMonth(Math.max(0, Math.min(months, Math.round(ratio * months))));
   }
 
-  const firstYear = Number(projection.repayment.firstPaymentDate.slice(0, 4));
+  const firstYear = Number(baseRepayment.firstPaymentDate.slice(0, 4));
   const description = charted.map(line => `${line.name}: ${formatCurrency(line.projection.balanceAtRepaymentStart)} at repayment start, ${line.projection.debtFreeDate ? `paid off after ${line.projection.amortizationSchedule.length} months` : 'not paid off within the horizon'}`).join('; ');
 
   return (

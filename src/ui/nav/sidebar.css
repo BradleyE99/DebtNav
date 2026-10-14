@@ -1,0 +1,164 @@
+/*
+ * App shell: collapsible left sidebar (desktop) and off-canvas drawer (≤ 768 px).
+ * Uses the planner.css design tokens. The 768 px breakpoint must match DRAWER_QUERY in AppShell.tsx.
+ *
+ * --shell-offset is the height of sticky chrome above the content (0 on desktop, the top bar on narrow
+ * screens). Other sticky elements and scroll-margin-top can use it to sit below the top bar.
+ */
+:root { --shell-offset: 0px; }
+
+.shell {
+  --sidebar-w: 236px;
+  display: flex;
+  align-items: flex-start;
+  min-height: 100vh;
+}
+.shell[data-sidebar='collapsed'] { --sidebar-w: 72px; }
+.shell-content { flex: 1 1 auto; min-width: 0; }
+
+/* ---------------------------------------------------------------- sidebar (desktop) */
+.shell-sidebar {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-w);
+  height: 100vh;
+  height: 100dvh;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow: hidden auto;
+  transition: width 200ms ease;
+}
+.shell-sidebar-head {
+  display: flex;
+  align-items: center;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.shell-toggle, .shell-close {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0.55rem 12px;
+  border-color: var(--line-strong);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.shell-close { display: none; }
+.shell-icon { flex: 0 0 20px; }
+
+.shell-nav ul { list-style: none; margin: 0; padding: 10px 10px 16px; display: flex; flex-direction: column; gap: 2px; }
+.shell-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 150ms ease;
+}
+.shell-link:hover { background: var(--canvas); }
+.shell-link[aria-current='location'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+
+/* Collapsed icon rail: labels stay in the accessibility tree but are visually hidden. */
+@media (min-width: 769px) {
+  .shell[data-sidebar='collapsed'] .shell-sidebar-head { padding: 12px 10px 10px; justify-content: center; }
+  .shell[data-sidebar='collapsed'] .shell-toggle { width: 48px; padding: 0; justify-content: center; }
+  .shell[data-sidebar='collapsed'] .shell-link { justify-content: center; padding: 10px 0; }
+  .shell[data-sidebar='collapsed'] .shell-label {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+}
+
+/* Tooltip for the rail (hover and keyboard focus); positioned in the viewport by Sidebar.tsx. */
+.shell-tooltip {
+  position: fixed;
+  z-index: 45;
+  padding-left: 10px;
+  transform: translateY(-50%);
+  animation: shell-fade-in 120ms ease;
+}
+.shell-tooltip span {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+}
+
+/* ---------------------------------------------------------------- top bar + drawer (narrow screens) */
+.shell-topbar { display: none; }
+.shell-backdrop { display: none; }
+
+@media (max-width: 768px) {
+  :root { --shell-offset: 56px; }
+  .shell { display: block; }
+  .shell-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 56px;
+    padding: 0 10px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+  }
+  .shell-menu { border-color: var(--line-strong); color: var(--ink); }
+  .shell-brand { font-weight: 800; color: var(--accent); letter-spacing: -0.02em; font-size: 1.1rem; }
+
+  .shell-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    display: none;
+    width: min(288px, 86vw);
+    height: auto;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+    transition: none;
+  }
+  .shell[data-drawer='open'] .shell-sidebar { display: flex; animation: shell-drawer-in 200ms ease; }
+  .shell-toggle { display: none; }
+  .shell-close { display: inline-flex; }
+  .shell-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    background: rgba(16, 28, 23, 0.5);
+    animation: shell-fade-in 200ms ease;
+  }
+}
+
+@keyframes shell-drawer-in { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes shell-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-sidebar, .shell-link { transition: none; }
+  .shell[data-drawer='open'] .shell-sidebar, .shell-backdrop, .shell-tooltip { animation: none; }
+}
+
+@media print {
+  .shell { display: block; }
+  .shell-topbar, .shell-sidebar, .shell-backdrop, .shell-tooltip { display: none !important; }
+}

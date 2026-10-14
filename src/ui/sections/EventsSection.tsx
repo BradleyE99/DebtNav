@@ -29,14 +29,19 @@ export function impactSentence(impact: EventImpact | undefined): string {
 
 export function EventsSection() {
   const { plan, update, projection } = usePlanner();
-  function addEvent() {
+  function addEvent(type: 'windfall' | 'income') {
     const id = newId();
     update(p => ({
       ...p,
-      lifeEvents: [...p.lifeEvents, {
-        id, name: 'New event', type: 'windfall', date: projection?.repayment.firstPaymentDate ?? p.settings.graduationDate,
-        amount: '0.00', allocationPercent: '100', recurrence: 'once',
-      }],
+      lifeEvents: [...p.lifeEvents, type === 'income'
+        ? {
+          id, name: 'Raise', type: 'income', date: projection?.repayment?.firstPaymentDate ?? p.settings.graduationDate,
+          amount: p.postGradIncome.annualSalary, allocationPercent: p.postGradIncome.raiseAllocationPercent,
+        }
+        : {
+          id, name: 'New event', type: 'windfall', date: projection?.repayment?.firstPaymentDate ?? p.settings.graduationDate,
+          amount: '0.00', allocationPercent: '100', recurrence: 'once',
+        }],
     }));
     requestAnimationFrame(() => document.getElementById(`lifeEvents.${id}.name`)?.focus());
   }
@@ -46,7 +51,11 @@ export function EventsSection() {
       <p className="section-intro">Add dated changes — a raise, a bonus, a new grant — and see how each one moves your plan.</p>
       {plan.lifeEvents.length === 0 && <p className="empty">No life events yet.</p>}
       {plan.lifeEvents.map(event => <EventCard key={event.id} event={event} />)}
-      <button type="button" className="button-primary" onClick={addEvent} disabled={plan.lifeEvents.length >= 100}>Add life event</button>
+      <div className="button-row">
+        <button type="button" className="button-primary" onClick={() => addEvent('windfall')} disabled={plan.lifeEvents.length >= 100}>Add life event</button>
+        <button type="button" onClick={() => addEvent('income')} disabled={plan.lifeEvents.length >= 100}>Add income change</button>
+      </div>
+      <p className="field-hint">New income changes start at your current salary and your default share of raises put toward debt ({plan.postGradIncome.raiseAllocationPercent}%).</p>
       <Explain>
         <p>Income change: from its month, your monthly amount for loans changes by (new salary − previous salary) ÷ 12 × share to debt. A new salary of $0 models a job ending.</p>
         <p>Windfall: amount × share to debt is paid toward loans in that month by your strategy (in the first repayment month if it happens earlier). Yearly windfalls repeat each anniversary until the end date or payoff.</p>
@@ -71,7 +80,10 @@ function EventCard({ event }: { event: LifeEvent }) {
       <h3 id={headingId}>{event.name} <span className="subtle">{EVENT_TYPE_LABELS[event.type]}</span></h3>
       <div className="field-grid">
         <TextField id={`${base}.name`} label="Event name" value={event.name} onCommit={name => patch({ name })} />
-        <SelectField id={`${base}.type`} label="Event type" options={typeOptions} value={event.type} onCommit={type => patch({ type })} />
+        <SelectField id={`${base}.type`} label="Event type" options={typeOptions} value={event.type}
+          onCommit={type => patch(type === 'income' && event.type !== 'income'
+            ? { type, allocationPercent: plan.postGradIncome.raiseAllocationPercent }
+            : { type })} />
         <DateField id={`${base}.date`} label="Date" value={event.date} onCommit={date => patch({ date })} />
         <MoneyField id={`${base}.amount`} label={event.type === 'income' ? 'New annual salary' : 'Amount'} value={event.amount} onCommit={amount => patch({ amount })} />
         {!schoolEvent && (

@@ -64,7 +64,8 @@ export interface LifeEvent {
 export type OverrideValue = string | number | boolean;
 export interface Scenario { id: string; name: string; overrides: Record<string, OverrideValue> }
 
-export type StrategyId = 'avalanche' | 'snowball' | 'custom';
+/** Any id registered in src/engine/strategies/registry.ts (US-605: new strategies need no contract change). */
+export type StrategyId = string;
 export interface PlannerPlan extends Plan {
   schoolYears: PlannerYear[];
   loans: PlannerLoan[];
@@ -94,7 +95,7 @@ export interface PlannerProjection {
   repayment: Projection; years: YearSummary[]; minimumTotal: Money; paymentShortfall: Money;
   timeline: TimelineEntry[]; notices: string[];
 }
-/** Secondary outputs: may be computed from a deferred plan value so typing stays responsive. */
+/** Secondary outputs: computed off the main thread (src/ui/derived Web Worker) so typing stays responsive; the core projection uses a deferred plan value. */
 export interface PlannerComparisons { strategyComparisons: Comparison[]; scenarioComparisons: Comparison[]; eventImpacts: EventImpact[]; scenarioRange: { earliest: ISODate | null; latest: ISODate | null } }
 export type PlannerResult = Result<PlannerProjection>;
 
@@ -120,7 +121,7 @@ export type PlannerResult = Result<PlannerProjection>;
 export interface PlannerDocument { plan: PlannerPlan; disclaimerDismissed: boolean }
 export interface SavedEnvelope { app: 'debtnav'; schemaVersion: typeof SCHEMA_VERSION; savedAt: string; document: PlannerDocument }
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void }
-export interface LoadResult { document: PlannerDocument | null; notice: string | null; /** true when stored data exists but is unreadable; autosave must not overwrite it until the user imports, resets, or deletes. */ preservedUnreadable: boolean }
+export interface LoadResult { document: PlannerDocument | null; notice: string | null; /** true when stored data exists but is unreadable; autosave must not overwrite it until the user imports, resets, or deletes. */ preservedUnreadable: boolean; /** Automatic, user-visible repairs applied while loading older data (e.g. late disbursements). */ repairs?: string[] }
 export interface SaveResult { ok: boolean; notice: string | null }
 /**
  * src/data/validation.ts:  validatePlannerPlan(unknown): Result<PlannerPlan>  (FieldError.path uses field paths)

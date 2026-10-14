@@ -256,3 +256,60 @@ describe('never throws on arbitrary values (NFR-11)', () => {
     }), { numRuns: 200 });
   });
 });
+
+describe('disbursement after repayment start (review M1)', () => {
+  it('is reported at loans.<id>.disbursementDate; on the start day is allowed', () => {
+    const plan = planWithRecords();
+    plan.loans[0].disbursementDate = '2030-11-21';
+    expect(validatePlannerPlan(plan)).toMatchObject({
+      ok: false,
+      errors: [{ path: 'loans.loan-a.disbursementDate', code: 'OUT_OF_RANGE', message: 'Disbursement must be on or before repayment start (2030-11-20).' }],
+    });
+    plan.loans[0].disbursementDate = '2030-11-20';
+    expect(validatePlannerPlan(plan).ok).toBe(true);
+  });
+
+  it('follows grace: grace 0 moves repayment start to graduation', () => {
+    const plan = planWithRecords();
+    plan.loans[0].disbursementDate = '2030-06-01';
+    expect(validatePlannerPlan(plan).ok).toBe(true);
+    plan.settings.graceMonths = 0;
+    expect(paths(plan)).toEqual(['loans.loan-a.disbursementDate']);
+  });
+
+  it('in a scenario, a graduation or grace override that causes it is reported at that override', () => {
+    const plan = planWithRecords();
+    plan.loans[0].disbursementDate = '2030-06-01';
+    plan.scenarios = [{ id: 's1', name: 'Early', overrides: { 'settings.graceMonths': 0 } }];
+    const result = validatePlannerPlan(plan);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.map(e => e.path)).toEqual(['scenarios.s1.overrides.settings.graceMonths']);
+    expect(result.errors[0].message).toMatch(/Direct.*2030-06-01/);
+
+    plan.scenarios = [{ id: 's1', name: 'Early', overrides: { 'settings.graduationDate': '2029-05-20' } }];
+    expect(paths(plan)).toContain('scenarios.s1.overrides.settings.graduationDate');
+  });
+
+  it('in a scenario, a late disbursement override is reported at the loan override', () => {
+    const plan = planWithRecords();
+    plan.scenarios = [{ id: 's1', name: 'Late', overrides: { 'loans.loan-a.disbursementDate': '2031-01-01' } }];
+    expect(paths(plan)).toEqual(['scenarios.s1.overrides.loans.loan-a.disbursementDate']);
+  });
+});
+
+describe('strategies come from the engine registry (US-605, review m2)', () => {
+  it('accepts every user-facing registry strategy and rejects internal or unknown ids', async () => {
+    const { listStrategies } = await import('../engine/strategies/registry');
+    for (const { id } of listStrategies()) {
+      const plan = planWithRecords();
+      plan.repayment.strategyId = id;
+      expect(validatePlannerPlan(plan).ok, id).toBe(true);
+    }
+    for (const id of ['input-order', 'highest-balance', '']) {
+      const plan = planWithRecords();
+      plan.repayment.strategyId = id;
+      expect(validatePlannerPlan(plan)).toMatchObject({ ok: false, errors: [{ path: 'repayment.strategyId', code: 'UNKNOWN_STRATEGY' }] });
+    }
+  });
+});

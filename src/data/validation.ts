@@ -5,14 +5,17 @@
  *   wrapped in a try/catch that converts unexpected failures into a field error.
  * - FieldError.path uses the contract's field-path format (record IDs, never array indexes), so the
  *   UI can show each message next to the input with the same id.
- * - Validation is structural: it guarantees the engine can read the plan safely. Planning problems
- *   (for example a loan disbursed after repayment starts) are reported by the projection instead,
- *   so they never block an edit.
+ * - Validation guarantees the engine can project the plan: besides structure it rejects a loan
+ *   disbursed after repayment starts (graduation + grace), at 'loans.<id>.disbursementDate'.
+ *   usePlannerDocument re-attributes that error to the settings field when a date/grace edit causes
+ *   it; scenario checks attribute it to the responsible override. Softer planning problems are
+ *   reported by the projection and never block an edit.
  */
 import { D } from '../engine/money';
 import { addMonths, validDate } from '../engine/dates';
 import { applyScenario } from '../engine/planner';
 import { isResolvablePath, overridablePaths } from '../engine/paths';
+import { listStrategies } from '../engine/strategies/registry';
 import type { FieldError, PlannerDocument, PlannerPlan, Result } from '../engine/planner-contracts';
 
 type Code = FieldError['code'];
@@ -55,7 +58,8 @@ const COST_PERIODS = ['annual', 'fall', 'spring', 'summer'];
 const RESOURCE_TYPES = ['grant', 'scholarship', 'job', 'savings', 'family', 'other'];
 const LOAN_TYPES = ['subsidized', 'unsubsidized', 'private', 'other'];
 const EVENT_TYPES = ['income', 'windfall', 'expense', 'aid'];
-const STRATEGIES = ['avalanche', 'snowball', 'custom'];
+/** US-605: user-selectable strategies come from the engine registry (internal ones are excluded). */
+const strategyIds = (): string[] => listStrategies().map(entry => entry.id);
 
 export const isPlainObject = (value: unknown): value is Obj =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -294,7 +298,7 @@ function validateLoans(plan: Obj, check: Checker, yearIds: Set<string>): Set<str
 
 function validateRepayment(plan: Obj, check: Checker, loanIds: Set<string>): void {
   const repayment = check.object(plan.repayment, 'repayment');
-  check.choice(repayment.strategyId, 'repayment.strategyId', STRATEGIES, 'UNKNOWN_STRATEGY');
+  check.choice(repayment.strategyId, 'repayment.strategyId', strategyIds(), 'UNKNOWN_STRATEGY');
   check.money(repayment.extraMonthlyPayment, 'repayment.extraMonthlyPayment');
   check.integer(repayment.maxMonths, 'repayment.maxMonths', LIMITS.horizonMonths, true);
   check.choice(repayment.mode, 'repayment.mode', ['standard', 'federal']);
@@ -438,9 +442,33 @@ function validateScenarioEffects(plan: PlannerPlan, check: Checker): void {
       continue;
     }
     const nested = runValidation(effective, false);
-    for (const error of nested) check.fail(`${prefix}.${error.path}`, error.code, error.message);
+    for (const error of nested) {
+      const loanId = DISBURSEMENT_PATH.exec(error.path)?.[1];
+      if (loanId === undefined || Object.hasOwn(scenario.overrides, error.path)) {
+        check.fail(`${prefix}.${error.path}`, error.code, error.message);
+        continue;
+      }
+      // The loan's own date is not overridden, so a date or grace override caused this.
+      const cause = ['settings.graduationDate', 'settings.graceMonths'].find(key => Object.hasOwn(scenario.overrides, key));
+      const loan = plan.loans.find(entry => entry.id === loanId);
+      const start = repaymentStartDate(effective.settings);
+      check.fail(
+        `${prefix}.${cause ?? error.path}`,
+        error.code,
+        cause ? `In this scenario repayment would start ${start}, before loan "${loan?.name ?? loanId}" is disbursed (${loan?.disbursementDate}).` : error.message,
+      );
+    }
   }
 }
+
+export const repaymentStartDate = (settings: PlannerPlan['settings']): string => addMonths(settings.graduationDate, settings.graceMonths);
+const disbursementMessage = (start: string): string => `Disbursement must be on or before repayment start (${start}).`;
+/** True for the disbursement-after-repayment-start rule (base loan field or scenario attribution). */
+export function isDisbursementError(error: FieldError): boolean {
+  return error.code === 'OUT_OF_RANGE'
+    && (error.message.startsWith('Disbursement must be on or before repayment start') || error.message.startsWith('In this scenario repayment would start'));
+}
+export const DISBURSEMENT_PATH = /^loans\.([A-Za-z0-9_-]+)\.disbursementDate$/;
 
 function runValidation(value: unknown, includeScenarios: boolean): FieldError[] {
   const check = new Checker();
@@ -468,6 +496,13 @@ function runValidation(value: unknown, includeScenarios: boolean): FieldError[] 
       const end = validDate(start) ? addMonths(start, (typeof horizon === 'number' ? horizon : 600) + 1) : '';
       if (!validDate(start) || !validDate(end)) {
         check.fail('settings.graduationDate', 'OUT_OF_RANGE', 'Repayment would extend past the year 9999. Choose an earlier date.');
+      } else {
+        // The engine cannot project a loan disbursed after repayment starts.
+        for (const loan of value.loans as PlannerPlan['loans']) {
+          if (loan.disbursementDate > start) {
+            check.fail(`loans.${loan.id}.disbursementDate`, 'OUT_OF_RANGE', disbursementMessage(start));
+          }
+        }
       }
     }
 

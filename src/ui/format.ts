@@ -1,5 +1,6 @@
 import { D } from '../engine/money';
 import { formatCurrency } from '../data/parse';
+import { listStrategies } from '../engine/strategies/registry';
 
 export { formatCurrency };
 
@@ -51,11 +52,10 @@ export const LOAN_TYPE_LABELS = {
   other: 'Other',
 } as const;
 
-export const STRATEGY_LABELS = {
-  avalanche: 'Avalanche (highest rate first)',
-  snowball: 'Snowball (smallest balance first)',
-  custom: 'Custom order',
-} as const;
+/** User-facing payoff strategies from the engine registry (US-605: new strategies appear automatically). */
+export function strategyOptions(): [string, string][] {
+  return listStrategies().map(entry => [entry.id, entry.name]);
+}
 
 export const COST_CATEGORY_LABELS = {
   tuition: 'Tuition', fees: 'Fees', housing: 'Housing', food: 'Food', books: 'Books',
@@ -76,5 +76,5 @@ export const EVENT_TYPE_LABELS = {
 } as const;
 
 export function strategyName(id: string): string {
-  return (STRATEGY_LABELS as Record<string, string>)[id] ?? id;
+  return listStrategies().find(entry => entry.id === id)?.name ?? id;
 }

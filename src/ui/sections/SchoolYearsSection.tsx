@@ -69,6 +69,9 @@ function YearCard({ year, index, previous, summary, onLoanCreated }: YearCardPro
     count: year.costItems.filter(item => item.semester === period).length,
   }));
   const itemsTotal = money(sum(year.costItems.map(item => item.amount)));
+  // Expense events are part of the year's cost of attendance (engine summary); show them as a line.
+  const eventDelta = summary ? new D(summary.costs).minus(itemsTotal) : null;
+  const eventCosts = eventDelta && eventDelta.gt(0) ? money(eventDelta) : null;
 
   function addCost() {
     const id = newId();
@@ -128,7 +131,9 @@ function YearCard({ year, index, previous, summary, onLoanCreated }: YearCardPro
         {subtotals.filter(item => item.count > 0 && item.period !== 'annual').map(item => (
           <div key={item.period}><dt>{item.label} subtotal</dt><dd>{formatCurrency(item.total)}</dd></div>
         ))}
-        <div className="subtotal-total"><dt>{yearName} cost total</dt><dd>{formatCurrency(itemsTotal)}</dd></div>
+        {eventCosts && <div><dt>Cost items</dt><dd>{formatCurrency(itemsTotal)}</dd></div>}
+        {eventCosts && <div><dt>School expense events</dt><dd>+{formatCurrency(eventCosts)}</dd></div>}
+        <div className="subtotal-total"><dt>{yearName} cost total</dt><dd>{formatCurrency(summary && eventCosts ? summary.costs : itemsTotal)}</dd></div>
       </dl>
 
       <h4>Resources</h4>

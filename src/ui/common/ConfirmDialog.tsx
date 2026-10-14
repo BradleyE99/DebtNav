@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ConfirmDialogProps {
   title: string;
@@ -13,7 +14,11 @@ interface ConfirmDialogProps {
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-/** Modal confirmation: focus moves in, Tab is trapped, Escape cancels, focus is restored on close. */
+/**
+ * Modal confirmation: rendered at the end of <body>; the rest of the page is made inert and hidden
+ * from assistive technology while it is open. Focus moves in, Tab is trapped, Escape cancels, and
+ * focus is restored on close.
+ */
 export function ConfirmDialog({ title, children, confirmLabel, cancelLabel = 'Cancel', destructive, onConfirm, onCancel }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -22,8 +27,15 @@ export function ConfirmDialog({ title, children, confirmLabel, cancelLabel = 'Ca
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const backdrop = dialogRef.current?.parentElement ?? null;
+    const background = Array.from(document.body.children).filter((element): element is HTMLElement =>
+      element instanceof HTMLElement && element !== backdrop && !element.inert);
+    for (const element of background) { element.inert = true; element.setAttribute('aria-hidden', 'true'); }
     cancelRef.current?.focus();
-    return () => { if (previous?.isConnected) previous.focus(); };
+    return () => {
+      for (const element of background) { element.inert = false; element.removeAttribute('aria-hidden'); }
+      if (previous?.isConnected) previous.focus();
+    };
   }, []);
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -41,7 +53,7 @@ export function ConfirmDialog({ title, children, confirmLabel, cancelLabel = 'Ca
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 
-  return (
+  return createPortal(
     <div className="dialog-backdrop">
       {/* Keyboard handling (Escape, focus trap) belongs on the dialog container per the WAI-ARIA dialog pattern. */}
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
@@ -61,6 +73,7 @@ export function ConfirmDialog({ title, children, confirmLabel, cancelLabel = 'Ca
           <button type="button" className={destructive ? 'button-danger' : 'button-primary'} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

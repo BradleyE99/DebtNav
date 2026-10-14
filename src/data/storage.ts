@@ -6,7 +6,8 @@ import { SCHEMA_VERSION } from '../engine/planner-contracts';
 import type { LoadResult, PlannerDocument, Result, SavedEnvelope, SaveResult, StorageLike } from '../engine/planner-contracts';
 import { pruneDanglingReferences } from '../engine/paths';
 import type { PlannerPlan } from '../engine/planner-contracts';
-import { isPlainObject, validateDocument } from './validation';
+import { applyScenario } from '../engine/planner';
+import { isDisbursementError, isPlainObject, repaymentStartDate, validateDocument } from './validation';
 
 export const STORAGE_KEY = 'debtnav.plan';
 /** Keys used by earlier builds. Read for migration, removed on delete, never written. */
@@ -82,8 +83,76 @@ function migrateV2Document(document: unknown): unknown {
   };
 }
 
+/**
+ * Earlier development builds accepted loans disbursed after repayment starts, which the engine
+ * cannot project. Move each such base loan's disbursement to the repayment start date, and in
+ * scenarios drop the override that causes it (the loan's own date override if there is one,
+ * otherwise the grace override, then the graduation override). Returns a description per change.
+ * Only called when every validation error is of this kind; never throws.
+ */
+function repairDisbursements(document: unknown): { document: unknown; repairs: string[] } | null {
+  try {
+    if (!isPlainObject(document) || !isPlainObject(document.plan)) return null;
+    const plan = structuredClone(document.plan) as unknown as PlannerPlan;
+    const repairs: string[] = [];
+    const start = repaymentStartDate(plan.settings);
+    for (const loan of plan.loans) {
+      if (loan.disbursementDate > start) {
+        repairs.push(`Loan "${loan.name}" disbursement moved from ${loan.disbursementDate} to ${start} so it can be projected.`);
+        loan.disbursementDate = start;
+      }
+    }
+    for (const scenario of plan.scenarios) {
+      for (let guard = 0; guard < plan.loans.length + 2; guard++) {
+        const effective = applyScenario({ ...plan, scenarios: [] }, scenario);
+        const effectiveStart = repaymentStartDate(effective.settings);
+        const late = effective.loans.find(loan => loan.disbursementDate > effectiveStart);
+        if (!late) break;
+        const own = `loans.${late.id}.disbursementDate`;
+        const key = [own, 'settings.graceMonths', 'settings.graduationDate'].find(candidate => Object.hasOwn(scenario.overrides, candidate));
+        if (!key) return null;
+        const { [key]: removed, ...rest } = scenario.overrides;
+        scenario.overrides = rest;
+        repairs.push(`Scenario "${scenario.name}": removed the change to ${key === own ? `loan "${late.name}" disbursement date` : key === 'settings.graceMonths' ? 'the grace period' : 'the graduation date'} (${String(removed)}) so loan "${late.name}" can be projected.`);
+      }
+    }
+    return repairs.length ? { document: { ...document, plan }, repairs } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Validate, repairing only the disbursement-after-repayment-start rule (see repairDisbursements). */
+function validateWithRepairs(document: unknown): { result: Result<PlannerDocument>; repairs: string[] } {
+  const first = validateDocument(document);
+  let result = first;
+  let current = document;
+  const repairs: string[] = [];
+  // Base errors hide scenario checks, so a repaired base can reveal scenario problems: retry a few times.
+  for (let round = 0; round < 3 && !result.ok && result.errors.every(isDisbursementError); round++) {
+    const repaired = repairDisbursements(current);
+    if (!repaired) break;
+    current = repaired.document;
+    repairs.push(...repaired.repairs);
+    result = validateDocument(current);
+  }
+  return result.ok ? { result, repairs } : { result: first, repairs: [] };
+}
+
+export interface DetailedImport { result: Result<PlannerDocument>; /** Changes made so an older plan can be projected; empty when none. */ repairs: string[] }
+
 /** Parse exported or stored JSON text into a validated v3 document, migrating v2. */
 export function importDocument(text: string): Result<PlannerDocument> {
+  return importDocumentDetailed(text).result;
+}
+
+/** importDocument plus the list of automatic repairs (shown to the user as a notice). */
+export function importDocumentDetailed(text: string): DetailedImport {
+  const detailed = parseImport(text);
+  return 'result' in detailed ? detailed : { result: detailed, repairs: [] };
+}
+
+function parseImport(text: string): Result<PlannerDocument> | DetailedImport {
   try {
     if (typeof text !== 'string') return importError('The file could not be read.');
     if (text.length > MAX_JSON_LENGTH) return importError('The file is larger than the 5 MB import limit.');
@@ -103,12 +172,12 @@ export function importDocument(text: string): Result<PlannerDocument> {
     if (!('document' in envelope)) return importError('The file does not contain a plan.');
 
     const document = version === 2 ? migrateV2Document(envelope.document) : envelope.document;
-    const result = validateDocument(document);
+    const { result, repairs } = validateWithRepairs(document);
     if (!result.ok) {
       const first = result.errors[0];
       return importError(`The plan in this file is not valid (${first.path}: ${first.message}) Your current plan was not changed.`);
     }
-    return result;
+    return { result, repairs };
   } catch {
     return importError('The file could not be read. Your current plan was not changed.');
   }
@@ -133,27 +202,34 @@ export function exportDocument(document: PlannerDocument): string {
   return result.value;
 }
 
-export function loadDocument(storage?: StorageLike): LoadResult {
+/** LoadResult plus automatic repairs. When repairs is non-empty, `notice` describes them (storage is fine). */
+export interface DetailedLoadResult extends LoadResult { repairs: string[] }
+
+export const repairNotice = (repairs: readonly string[], saved: 'next-edit' | 'now'): string =>
+  `${repairs.join(' ')} ${saved === 'next-edit' ? 'Your saved data is unchanged until you edit the plan.' : 'The updated plan has been saved.'}`;
+
+export function loadDocument(storage?: StorageLike): DetailedLoadResult {
   const target = resolveStorage(storage);
-  if (!target) return { document: null, notice: UNAVAILABLE_NOTICE, preservedUnreadable: false };
+  if (!target) return { document: null, notice: UNAVAILABLE_NOTICE, preservedUnreadable: false, repairs: [] };
   try {
     let raw = target.getItem(STORAGE_KEY);
     for (const key of LEGACY_STORAGE_KEYS) {
       if (raw !== null) break;
       raw = target.getItem(key);
     }
-    if (raw === null) return { document: null, notice: null, preservedUnreadable: false };
-    const result = importDocument(raw);
+    if (raw === null) return { document: null, notice: null, preservedUnreadable: false, repairs: [] };
+    const { result, repairs } = importDocumentDetailed(raw);
     if (result.ok) {
-      return { document: result.value, notice: null, preservedUnreadable: false };
+      return { document: result.value, notice: repairs.length ? repairNotice(repairs, 'next-edit') : null, preservedUnreadable: false, repairs };
     }
     return {
       document: null,
       notice: `Your saved plan could not be read: ${result.errors[0].message} It has been preserved and automatic saving is paused, so changes you make now will not be saved. Import a plan file to replace it, or delete your data to start over.`,
       preservedUnreadable: true,
+      repairs: [],
     };
   } catch {
-    return { document: null, notice: UNAVAILABLE_NOTICE, preservedUnreadable: false };
+    return { document: null, notice: UNAVAILABLE_NOTICE, preservedUnreadable: false, repairs: [] };
   }
 }
 

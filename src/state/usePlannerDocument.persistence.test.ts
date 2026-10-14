@@ -180,7 +180,7 @@ describe('reference integrity on edits', () => {
     act(() => {
       result.current.updatePlan(plan => ({
         ...plan,
-        loans: [{ id: 'l1', name: 'Loan', type: 'private', principal: '100.00', annualRate: '0.05', disbursementDate: lastYear.startDate, termMonths: 120, schoolYearId: lastYear.id }],
+        loans: [{ id: 'l1', name: 'Loan', type: 'private', principal: '100.00', annualRate: '0.05', disbursementDate: plan.settings.startDate, termMonths: 120, schoolYearId: lastYear.id }],
         scenarios: [{ id: 's1', name: 'S', overrides: { [`schoolYears.${lastYear.id}.bufferPercent`]: '10', 'postGradIncome.annualSalary': '1.00' } }],
       }));
     });
@@ -199,5 +199,74 @@ describe('reference integrity on edits', () => {
     act(() => { outcome = result.current.updatePlan(plan => ({ ...plan, settings: { ...plan.settings, graduationDate: plan.settings.startDate } })); });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.errors.map(e => e.path)).toContain('settings.graduationDate');
+  });
+});
+
+describe('disbursement after repayment start is attributed to the edited field (review M1)', () => {
+  const withLoan = (date: string) => (plan: PlannerPlan): PlannerPlan => ({
+    ...plan,
+    loans: [{ id: 'l1', name: 'Spring loan', type: 'private', principal: '100.00', annualRate: '0.05', disbursementDate: date, termMonths: 120 }],
+  });
+
+  it('a graduation edit that would put repayment before an existing loan is rejected at settings.graduationDate', () => {
+    const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
+    act(() => { result.current.updatePlan(withLoan('2030-01-10')); });
+    const before = result.current.document;
+    let outcome!: ReturnType<typeof result.current.updatePlan>;
+    act(() => { outcome = result.current.updatePlan(plan => ({ ...plan, settings: { ...plan.settings, graduationDate: '2029-05-20' } })); });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.errors).toEqual([expect.objectContaining({ path: 'settings.graduationDate' })]);
+    expect(outcome.errors[0].message).toMatch(/2029-11-20.*"Spring loan" \(2030-01-10\)/);
+    expect(result.current.document).toBe(before);
+  });
+
+  it('a grace edit is rejected at settings.graceMonths', () => {
+    const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
+    act(() => { result.current.updatePlan(withLoan('2030-08-01')); });
+    let outcome!: ReturnType<typeof result.current.updatePlan>;
+    act(() => { outcome = result.current.updatePlan(plan => ({ ...plan, settings: { ...plan.settings, graceMonths: 0 } })); });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.errors.map(e => e.path)).toEqual(['settings.graceMonths']);
+  });
+
+  it('a loan edit is rejected at the loan disbursement field', () => {
+    const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
+    let outcome!: ReturnType<typeof result.current.updatePlan>;
+    act(() => { outcome = result.current.updatePlan(withLoan('2031-01-01')); });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.errors.map(e => e.path)).toEqual(['loans.l1.disbursementDate']);
+  });
+});
+
+describe('loading and importing older plans with late disbursements', () => {
+  const legacy = (): string => {
+    const plan = createDefaultPlan();
+    plan.loans.push({ id: 'spring', name: 'Spring loan', type: 'private', principal: '1000.00', annualRate: '0.05', disbursementDate: '2031-01-10', termMonths: 120 });
+    return JSON.stringify({ app: 'debtnav', schemaVersion: 3, savedAt: '2026-01-01T00:00:00.000Z', document: { plan, disclaimerDismissed: false } });
+  };
+
+  it('loads the repaired plan with a notice and only rewrites storage after the first edit', () => {
+    const raw = legacy();
+    const storage = memory({ [STORAGE_KEY]: raw });
+    const { result } = renderHook(() => usePlannerDocument({ storage }));
+    expect(result.current.document.plan.loans[0].disbursementDate).toBe('2030-11-20');
+    expect(result.current.saveStatus.state).toBe('saved');
+    expect(result.current.saveStatus.message).toMatch(/"Spring loan" disbursement moved from 2031-01-10 to 2030-11-20/);
+    act(() => { vi.runAllTimers(); window.dispatchEvent(new Event('pagehide')); });
+    expect(storage.getItem(STORAGE_KEY)).toBe(raw);
+    act(() => { result.current.updatePlan(setSalary('1.00')); });
+    act(() => { vi.runAllTimers(); });
+    expect(storedPlan(storage).loans[0].disbursementDate).toBe('2030-11-20');
+  });
+
+  it('importing a repairable file saves the repaired plan and names the change', () => {
+    const storage = memory();
+    const { result } = renderHook(() => usePlannerDocument({ storage }));
+    let outcome!: ReturnType<typeof result.current.importText>;
+    act(() => { outcome = result.current.importText(legacy()); });
+    expect(outcome.ok).toBe(true);
+    expect(result.current.saveStatus).toMatchObject({ state: 'saved', message: expect.stringMatching(/"Spring loan" disbursement moved/) });
+    expect(storedPlan(storage).loans[0].disbursementDate).toBe('2030-11-20');
   });
 });

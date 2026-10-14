@@ -12,12 +12,10 @@ import { FederalSection } from './sections/FederalSection';
 import { DataSection, SaveStatusBadge } from './sections/DataSection';
 import { ResultsSection } from './results/ResultsSection';
 import { KeyFigures } from './results/KeyFigures';
+import { AppShell } from './nav/AppShell';
+import { NAV_ITEMS } from './nav/navItems';
 import './planner.css';
 
-const NAV = [
-  ['setup', 'Timeline'], ['school', 'Costs'], ['loans', 'Loans'], ['repayment', 'Repayment'], ['events', 'Life events'],
-  ['scenarios', 'Scenarios'], ['federal', 'Federal'], ['results', 'Results'], ['data', 'Your data'],
-] as const;
 
 export default function PlannerApp({ store }: { store: PlannerStore }) {
   return (
@@ -35,57 +33,61 @@ function PlannerLayout() {
   const showDisclaimer = !store.document.disclaimerDismissed || disclaimerReopened;
 
   return (
-    <div className="app">
-      <a className="skip-link" href="#main">Skip to your plan</a>
-      <header className="app-header">
-        <div>
-          <p className="eyebrow">From your first school year to your debt-free day</p>
-          <h1>DebtNav</h1>
-          <p className="tagline">A living student-debt plan. Edit anything; every result updates.</p>
-        </div>
-        <SaveStatusBadge />
-      </header>
-      <nav className="section-nav" aria-label="Planner sections">
-        <ul>{NAV.map(([id, label]) => <li key={id}><a href={`#${id}`}>{label}</a></li>)}</ul>
-      </nav>
-      {showDisclaimer && (
-        <Disclaimer
-          focusOnOpen={disclaimerReopened}
-          onDismiss={() => {
-            store.dismissDisclaimer();
-            setDisclaimerReopened(false);
-            if (disclaimerReopened) requestAnimationFrame(() => document.getElementById('disclaimer-open')?.focus());
-          }}
-        />
-      )}
-      <UndoBar />
-      <main id="main">
-        <div className="layout">
-          <div className="inputs">
-            <SetupSection />
-            <SchoolYearsSection onLoanCreated={setFocusLoanId} />
-            <LoansSection focusLoanId={focusLoanId} onFocused={clearLoanFocus} />
-            <RepaymentSection />
-            <EventsSection />
-            <ScenariosSection />
-            <FederalSection />
+    <AppShell
+      items={NAV_ITEMS}
+      header={(
+        <header className="app-header">
+          <div>
+            <p className="eyebrow">From your first school year to your debt-free day</p>
+            <h1>DebtNav</h1>
+            <p className="tagline">A living student-debt plan. Edit anything; every result updates.</p>
           </div>
-          <aside className="key-figures-rail" aria-label="Key results">
-            <KeyFigures />
-          </aside>
+          <SaveStatusBadge />
+        </header>
+      )}
+      banner={(
+        <>
+          {showDisclaimer && (
+            <Disclaimer
+              focusOnOpen={disclaimerReopened}
+              onDismiss={() => {
+                store.dismissDisclaimer();
+                setDisclaimerReopened(false);
+                if (disclaimerReopened) requestAnimationFrame(() => document.getElementById('disclaimer-open')?.focus());
+              }}
+            />
+          )}
+          <UndoBar />
+        </>
+      )}
+      footer={(
+        <footer className="app-footer">
+          <button type="button" id="disclaimer-open" className="link-button" onClick={() => setDisclaimerReopened(true)}>
+            About these estimates (disclaimer)
+          </button>
+          <p>DebtNav · Estimates for your own planning, not financial advice. Your data stays on this device.</p>
+        </footer>
+      )}
+    >
+      <div className="layout">
+        <div className="inputs">
+          <SetupSection />
+          <SchoolYearsSection onLoanCreated={setFocusLoanId} />
+          <LoansSection focusLoanId={focusLoanId} onFocused={clearLoanFocus} />
+          <RepaymentSection />
+          <EventsSection />
+          <ScenariosSection />
+          <FederalSection />
         </div>
-        <div className="outputs">
-          <ResultsSection />
-          <DataSection />
-        </div>
-      </main>
-      <footer className="app-footer">
-        <button type="button" id="disclaimer-open" className="link-button" onClick={() => setDisclaimerReopened(true)}>
-          About these estimates (disclaimer)
-        </button>
-        <p>DebtNav · Estimates for your own planning, not financial advice. Your data stays on this device.</p>
-      </footer>
-    </div>
+        <aside className="key-figures-rail" aria-label="Key results">
+          <KeyFigures />
+        </aside>
+      </div>
+      <div className="outputs">
+        <ResultsSection />
+        <DataSection />
+      </div>
+    </AppShell>
   );
 }
 

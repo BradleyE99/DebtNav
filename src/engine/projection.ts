@@ -40,27 +40,31 @@ export function calculateProjection(plan: Plan, options: ProjectionOptions = {})
   if (!Array.isArray(p?.loans)) error('loans', 'REQUIRED', 'Loans must be an array.');
   const ids = new Set<string>();
   for (const [i, loan] of (Array.isArray(p?.loans) ? p.loans : []).entries()) {
-    const path = `loans.${i}`;
+    // Field paths use the record id (contract: never array indexes); index only when the id itself is unusable.
+    const usableId = loan && typeof loan === 'object' && typeof loan.id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(loan.id);
+    const path = usableId ? `loans.${loan.id}` : `loans.${i}`;
+    const who = loan && typeof loan === 'object' && typeof loan.name === 'string' && loan.name.trim() ? `Loan "${loan.name.trim()}"` : `Loan ${i + 1}`;
+    const loanError = (field: string, code: FieldError['code'], message: string) => error(`${path}.${field}`, code, `${who}: ${message}`);
     if (!loan || typeof loan !== 'object') { error(path, 'REQUIRED', 'Enter a loan.'); continue; }
-    if (typeof loan.id !== 'string' || !loan.id.trim()) error(`${path}.id`, 'REQUIRED', 'Loan ID is required.');
-    else if (ids.has(loan.id)) error(`${path}.id`, 'DUPLICATE_ID', 'Loan IDs must be unique.');
+    if (typeof loan.id !== 'string' || !loan.id.trim()) loanError('id', 'REQUIRED', 'Loan ID is required.');
+    else if (ids.has(loan.id)) loanError('id', 'DUPLICATE_ID', 'Loan IDs must be unique.');
     ids.add(loan.id);
-    if (typeof loan.name !== 'string' || !loan.name.trim()) error(`${path}.name`, 'REQUIRED', 'Loan name is required.');
-    if (!['subsidized', 'unsubsidized', 'private', 'other'].includes(loan.type)) error(`${path}.type`, 'OUT_OF_RANGE', 'Select a supported loan type.');
-    if (!moneyText(loan.principal)) error(`${path}.principal`, 'INVALID_MONEY', 'Enter nonnegative money with at most two decimal places.');
-    if (!decimalText(loan.annualRate) || !/^\d{1,2}(?:\.\d{1,12})?$/.test(loan.annualRate) || new D(loan.annualRate).gt('0.30')) error(`${path}.annualRate`, 'INVALID_RATE', 'Annual rate must be between 0 and 0.30, with at most 12 decimal places.');
-    if (!validDate(loan.disbursementDate)) error(`${path}.disbursementDate`, 'INVALID_DATE', 'Enter a valid YYYY-MM-DD date.');
-    if (!Number.isInteger(loan.termMonths) || loan.termMonths < 1 || loan.termMonths > 1200) error(`${path}.termMonths`, 'OUT_OF_RANGE', 'Term must be 1–1200 months.');
-    if (loan.monthlyPayment !== undefined && !moneyText(loan.monthlyPayment)) error(`${path}.monthlyPayment`, 'INVALID_MONEY', 'Enter nonnegative money with at most two decimal places.');
+    if (typeof loan.name !== 'string' || !loan.name.trim()) loanError('name', 'REQUIRED', 'Loan name is required.');
+    if (!['subsidized', 'unsubsidized', 'private', 'other'].includes(loan.type)) loanError('type', 'OUT_OF_RANGE', 'Select a supported loan type.');
+    if (!moneyText(loan.principal)) loanError('principal', 'INVALID_MONEY', 'Enter nonnegative money with at most two decimal places.');
+    if (!decimalText(loan.annualRate) || !/^\d{1,2}(?:\.\d{1,12})?$/.test(loan.annualRate) || new D(loan.annualRate).gt('0.30')) loanError('annualRate', 'INVALID_RATE', 'Annual rate must be between 0 and 0.30, with at most 12 decimal places.');
+    if (!validDate(loan.disbursementDate)) loanError('disbursementDate', 'INVALID_DATE', 'Enter a valid YYYY-MM-DD date.');
+    if (!Number.isInteger(loan.termMonths) || loan.termMonths < 1 || loan.termMonths > 1200) loanError('termMonths', 'OUT_OF_RANGE', 'Term must be 1–1200 months.');
+    if (loan.monthlyPayment !== undefined && !moneyText(loan.monthlyPayment)) loanError('monthlyPayment', 'INVALID_MONEY', 'Enter nonnegative money with at most two decimal places.');
     for (const key of ['payInterestWhileInSchool', 'accruesInterestInSchool'] as const)
-      if (loan[key] !== undefined && typeof loan[key] !== 'boolean') error(`${path}.${key}`, 'OUT_OF_RANGE', 'Use a boolean value.');
+      if (loan[key] !== undefined && typeof loan[key] !== 'boolean') loanError(key, 'OUT_OF_RANGE', 'Use a boolean value.');
   }
   if (errors.length || !p || !settings || !repayment || !strategy) return { ok: false, errors };
   const repaymentStartDate = addMonths(settings.graduationDate, settings.graceMonths);
   if (!validDate(repaymentStartDate) || !validDate(addMonths(repaymentStartDate, horizon)))
     return { ok: false, errors: [{ path: 'settings.graduationDate', code: 'OUT_OF_RANGE', message: 'Projection dates must stay within years 0001–9999.' }] };
-  for (const [i, loan] of p.loans.entries()) if (loan.disbursementDate > repaymentStartDate)
-    error(`loans.${i}.disbursementDate`, 'OUT_OF_RANGE', 'Disbursement must be on or before repayment starts.');
+  for (const loan of p.loans) if (loan.disbursementDate > repaymentStartDate)
+    error(`loans.${loan.id}.disbursementDate`, 'OUT_OF_RANGE', `Loan "${loan.name.trim()}": disbursement (${loan.disbursementDate}) must be on or before repayment starts (${repaymentStartDate}).`);
   if (errors.length) return { ok: false, errors };
   const inSchoolInterestPayments: InSchoolInterestPayment[] = [];
   const loans: LoanAtRepayment[] = p.loans.map(loan => {

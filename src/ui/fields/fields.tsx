@@ -6,6 +6,7 @@ import {
 import { decimalEquals, formatMoneyInput } from '../format';
 import { describedBy, FieldShell } from './FieldShell';
 import { errorForField, useDraftField, type CommitResult } from './useDraftField';
+import { useReportFieldStatus } from './fieldStatus';
 
 interface BaseProps<T> {
   /** Contract field path; used as DOM id and to match store errors. */
@@ -16,6 +17,8 @@ interface BaseProps<T> {
   onCommit: (value: T) => CommitResult;
   className?: string;
   disabled?: boolean;
+  /** A problem with the stored value found by the engine (the value is saved but cannot be projected). */
+  externalError?: string | null;
 }
 
 interface DraftInputProps<T> extends BaseProps<T> {
@@ -31,11 +34,13 @@ interface DraftInputProps<T> extends BaseProps<T> {
 
 /** Generic text-backed input built on useDraftField. */
 export function DraftInput<T>(props: DraftInputProps<T>) {
-  const { id, label, hint, className, inputMode, type = 'text', prefix, suffix, disabled } = props;
+  const { id, label, hint, className, inputMode, type = 'text', prefix, suffix, disabled, externalError } = props;
   const field = useDraftField({
     id, value: props.value, format: props.format, parse: props.parse, onCommit: props.onCommit,
     equals: props.equals, settleMs: props.settleMs,
   });
+  const error = field.error ?? externalError ?? null;
+  useReportFieldStatus(id, Boolean(error));
   const input = (
     <input
       id={id}
@@ -48,12 +53,13 @@ export function DraftInput<T>(props: DraftInputProps<T>) {
       onChange={field.onChange}
       onBlur={field.onBlur}
       onKeyDown={field.onKeyDown}
-      aria-invalid={field.error ? true : undefined}
-      aria-describedby={describedBy(id, hint, field.error)}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={describedBy(id, hint, error)}
     />
   );
   return (
-    <FieldShell id={id} label={label} hint={hint} error={field.error} className={className}>
+    <FieldShell id={id} label={label} hint={hint} error={error} className={className}
+      errorNote={field.error ? undefined : "This value is saved, but results can't be projected until it changes."}>
       {prefix || suffix ? (
         <span className="input-adorned">
           {prefix && <span className="input-affix" aria-hidden="true">{prefix}</span>}
@@ -185,6 +191,7 @@ export function TextField(props: BaseProps<string> & { maxLength?: number }) {
 export function SelectField<V extends string>(props: BaseProps<V> & { options: readonly (readonly [V, string])[] }) {
   const { id, label, hint, value, onCommit, options, className, disabled } = props;
   const [error, setError] = useState<string | null>(null);
+  useReportFieldStatus(id, Boolean(error));
   return (
     <FieldShell id={id} label={label} hint={hint} error={error} errorNote="" className={className}>
       <select
@@ -207,6 +214,7 @@ export function SelectField<V extends string>(props: BaseProps<V> & { options: r
 export function CheckboxField(props: BaseProps<boolean>) {
   const { id, label, hint, value, onCommit, className, disabled } = props;
   const [error, setError] = useState<string | null>(null);
+  useReportFieldStatus(id, Boolean(error));
   return (
     <div className={['field-check', className ?? ''].filter(Boolean).join(' ')}>
       <input
@@ -214,6 +222,7 @@ export function CheckboxField(props: BaseProps<boolean>) {
         type="checkbox"
         checked={value}
         disabled={disabled}
+        aria-invalid={error ? true : undefined}
         aria-describedby={describedBy(id, hint, error)}
         onChange={event => {
           const result = onCommit(event.target.checked);

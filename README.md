@@ -9,7 +9,7 @@ DebtNav is a student debt planner that connects two questions most tools treat s
 
 Enter your situation once. When something changes (a new job, a grant, a raise, a bonus), edit it, and every number updates instantly. Think of it as a GPS for student debt: it reroutes instead of making you start over.
 
-> **Status:** Connected local planner implemented across borrowing, repayment, events, scenarios and persistence. Live external-data verification and human/browser checks remain outstanding; see the requirements checklist.
+> **Status:** Connected local planner implemented across borrowing, repayment, events, scenarios and persistence. Production Chromium checks cover desktop and 360 px layouts, keyboard controls, editing and persistence. Human accessibility and usability checks remain outstanding; see the requirements checklist.
 
 ## Run locally
 
@@ -20,9 +20,11 @@ npm ci
 npm run dev
 ```
 
-Run `npm test` for acceptance tests and `npm run build` for type checking and the production build.
+Run `npm run check` for the full local gate and `npm run test:e2e` for the real-browser suite (see below).
 
-The planner saves valid inputs and unfinished field text automatically in this browser. Results are derived locally. Academic years begin on the school start anniversary; the final year ends at graduation. February 29 anniversaries use February 28 in non-leap years.
+On Windows, stop this project's Vite dev/preview servers and test watchers with Ctrl+C before running `npm ci`. A running server can keep the native Rolldown module loaded, causing `EPERM ... unlink ... rolldown-binding.win32-x64-msvc.node` during reinstall. Close any leftover DebtNav server processes, then retry `npm ci`; Administrator access is not needed for a file lock. An ordinary app restart only needs `npm run dev` when dependencies are already installed.
+
+The planner saves valid inputs automatically in this browser. Results are derived locally. Academic years begin on the school start anniversary; the final year ends at graduation. February 29 anniversaries use February 28 in non-leap years.
 
 ## Why I'm building this
 
@@ -74,29 +76,38 @@ DebtNav produces estimates for planning purposes only. It is not financial advic
 
 ## Using the connected planner
 
-Run `npm install` and `npm run dev`, then open the printed localhost URL. Node22.12+ is required.
+Run `npm ci` and `npm run dev`, then open the printed localhost URL (Node.js 22.12+). There is no Calculate button: every valid edit updates the results immediately and is saved in this browser.
 
-1. Edit school dates and grace; valid dates update academic years automatically.
-2. Add annual/semester costs and resources, including hourly job income. Edit any field directly; empty/invalid text stays visible while results keep the last valid model value.
-3. Create a loan from a year's gap or add loans manually. Edit rates, terms and interest settings.
-4. Enter a monthly debt budget, choose avalanche/snowball/custom, and reorder custom priorities by dragging or keyboard buttons.
-5. Add dated income, windfall, aid or expense events. Add scenarios and override assumptions; untouched values inherit base edits.
-6. Inspect live borrowing tables, repayment schedules, comparisons, chart/table and timeline. Reload to verify saved edits. Export/import a version2 JSON backup; deletion requires confirmation.
+1. Edit school dates and grace; academic years are added or removed to match, and data in remaining years is kept.
+2. Add annual or semester costs and resources (grants, scholarships, hourly or fixed job income with an unavailable share, savings, family help) and a borrowing buffer. Click into any field, clear it and type. Blank or invalid text stays visible with a field-level error, and results keep the last valid value.
+3. Create a loan from a year's gap or add loans manually. Loan cards show principal and annual rate while collapsed; open a card to edit its fields, or use Expand all / Collapse all. Saved loans start collapsed; new loans open for editing. Invalid drafts stay visible when reopened and flag the card; only valid edits are saved across reloads.
+4. Enter salary and monthly debt budget, choose avalanche, snowball or custom order, and reorder custom priorities by dragging or with the keyboard.
+5. Add dated income changes, windfalls, aid changes and expenses. Each event shows how it moves your debt-free date. Add scenarios that override only the fields you change; everything else inherits base-plan edits.
+6. Inspect year summaries, per-loan and combined amortization schedules, strategy and scenario comparisons, the balance chart with its table alternative, the timeline, and the federal context section. Reload to confirm edits persist. Export or import a versioned JSON backup. Deleting all data requires confirmation.
 
-Plans and unfinished field text save automatically under `debtnav.plan.v2`. No projection is stored. Storage failure shows a notice and keeps the app usable. Unreadable stored data is preserved and automatic replacement pauses; export/import or confirmed deletion controls recovery. Older-version JSON is explicitly rejected without changing the current plan.
+The plan is saved under `debtnav.plan` (schema version 3). Projections are never stored. If storage is unavailable, the app keeps working and says changes will not be saved. Unreadable saved data is preserved, and autosave pauses until you import a backup or delete it. Older development data (schema 2) is migrated. A saved or imported plan with a loan disbursed after repayment start is repaired with a visible notice.
+
+Use the left sidebar to move between planner sections. Collapse it to an icon rail for more space; this preference is remembered on this device. On narrow screens, Menu opens a drawer that closes after navigation, on an outside click, or with Escape. Navigation moves keyboard focus to the selected section heading.
 
 ## Architecture and verification
 
-React forms use lead-owned shared contracts in `src/engine/planner-contracts.ts`, pure decimal calculations in `src/engine/`, validation/storage in `src/data/`, and UI in `src/ui/`. The tested M1 API and fixtures remain available but the mounted app uses actual plan inputs. Existing UTC date helpers are retained. A native SVG chart with a full equivalent table provides accessible comparisons without adding a chart dependency.
+Shared contracts live in `src/engine/planner-contracts.ts`. Calculations are pure decimal (decimal.js) code in `src/engine/` with no UI dependencies. Validation and storage live in `src/data/` and `src/state/`, federal reference data in `src/policy/`, the Scorecard adapter in `src/integrations/`, and the React UI in `src/ui/`. Strategy comparisons and federal estimates run in a Web Worker so typing stays responsive.
 
-`npm test` runs calculation, property, golden, editing, persistence and accessibility tests. `npm run test:coverage` enforces90% engine lines. `npm run test:bench` measures the four-year/eight-loan/360-month reference projection. `npm run lint:money` checks money rules. `npm run build` type-checks and builds.
+| Command | What it checks |
+|---|---|
+| `npm run check` | Typecheck, ESLint (incl. jsx-a11y), money lint, all unit/property/component tests, recalculation benchmark, production build |
+| `npm run test:coverage` | ≥ 90% line coverage across engine, policy, data, state and integrations |
+| `npm run test:bench` | US-701 reference plan (4 years, 8 loans, 360 months) |
+| `npm run test:e2e` | Real-Chromium journey (keyboard typing, reload, export/import, delete), axe incl. color contrast, keyboard-only, 360 px, print, keystroke latency. Run `npx playwright install chromium` once first. |
+
+`.github/workflows/ci.yml` runs these on push. It has not been run on GitHub yet.
 
 ## Federal and College Scorecard context
 
-Federal reference data is versioned as of2026-10-12 in `src/policy/reference.ts`, sourced from [Federal Student Aid loan-limit guidance](https://fsapartners.ed.gov/sites/default/files/2026-05/FrequentlyAskedQuestionsLoanLimits.pdf) and [official RAP rules](https://edfinancial.studentaid.gov/income-driven-repaymentinformation-center/rap). The separate simplified RAP comparison assumes one borrower, fixed AGI, qualifying on-time payments and no spouse debt. It models current-interest subsidy, matching principal and potential360-payment forgiveness; it is not an eligibility decision or tax calculation. The standard projection uses editable SRS assumptions, clearly distinguished from policy.
+Federal reference data in `src/policy/reference.ts` is versioned as of 2026-10-13, with a source link for every value. The values were checked against the FSA Loan Limits FAQ (May 20, 2026), 34 CFR 685.200–685.210 (eCFR text as of 2026-10-09), FSA announcement GENERAL-26-33 (2026-27 rates) and the 2026 HHS poverty guidelines. The app keeps federal rules separate from DebtNav's simplified modeling assumptions. RAP, IBR (unavailable when any loan was made on or after July 1, 2026) and Tiered Standard estimates are comparisons, not eligibility decisions.
 
-Optional Scorecard lookup sends only a public school name and requested data year. All debt-to-earnings arithmetic stays local. It uses the documented public DEMO_KEY, never a private credential; [api.data.gov](https://api.data.gov/docs/developer-manual/) limits demo access to30 requests/hour and50/day. Network/CORS/rate limits, suppressed earnings and unsupported responses produce an explicit unavailable state. Live API schema/browser access could not be verified in this environment.
+The optional College Scorecard lookup is user-initiated. It sends only the school name, data key ("latest" release by default), the requested field list and an API key: the public `DEMO_KEY` (about 10 requests per IP), or a personal api.data.gov key you paste, which stays in memory and is never saved. No plan data is sent, and the debt-to-earnings ratio is computed on the device. The live API and its CORS access were verified on 2026-10-13.
 
 ## Review status
 
-[Requirements checklist](docs/REQUIREMENTS-CHECKLIST.md) maps every story/NFR to implementation and evidence. [Independent review](docs/FULL-REVIEW.md) records findings and resolutions; [coordination plan](docs/IMPLEMENTATION-PLAN.md) records ownership. Real-browser clear/type/reload/download/import journey,360px visual inspection, contrast and screen-reader checks remain unperformed because no browser surface is available. Five-student usability testing needs human participants. No push, merge, deployment or CI success is claimed.
+[Requirements checklist](docs/REQUIREMENTS-CHECKLIST.md) maps every story and NFR to its implementation and evidence. [Independent review](docs/INDEPENDENT-REVIEW.md) records findings and resolutions. Still outstanding: five-student usability testing (NFR-7), a manual screen-reader pass (NFR-6), a real printed page, and a CI run on GitHub. No push, merge or deployment has been performed.

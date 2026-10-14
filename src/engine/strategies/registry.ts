@@ -39,3 +39,8 @@ export function getStrategy(id: string, context: StrategyContext = emptyContext)
 export function listStrategies(): readonly StrategyRegistration[] {
   return registry.filter(entry => !entry.internal);
 }
+
+/** True for any user-facing registered strategy id (validation and UI use this, never a hard-coded list). */
+export function isStrategyId(id: unknown): id is string {
+  return typeof id === 'string' && listStrategies().some(entry => entry.id === id);
+}

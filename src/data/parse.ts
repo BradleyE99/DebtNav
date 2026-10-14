@@ -96,7 +96,7 @@ export function parseIntegerInput(text: string, options: { min: number; max: num
   // Thousands separators only in their proper places ('1,200'), never '1,2,3'.
   if (/^-?\d{1,3}(,\d{3})+$/.test(value)) value = value.replaceAll(',', '');
   if (!/^-?\d+$/.test(value)) return fail('Enter a whole number using digits only.');
-  const number = Number(value);
+  const number = Number(value); // money-lint-allow: whole-number count, not money
   if (number < options.min || number > options.max) return fail(`Enter a whole number from ${options.min} to ${options.max}.`);
   return ok(number);
 }

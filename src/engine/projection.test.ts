@@ -111,7 +111,15 @@ describe('validation and strategy boundary', () => {
     const p = plan(); const keys = path.split('.'); let target: any = p;
     for (const key of keys.slice(0, -1)) target = target[key]; target[keys.at(-1)!] = value;
     const result = calculateProjection(p); expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.some(error => error.path === path)).toBe(true);
+    // Loan errors use the record id (contract), falling back to the index only when the id is unusable.
+    const expected = path === 'loans.0.id' ? path : path.replace(/^loans\.0\./, 'loans.a.');
+    if (!result.ok) expect(result.errors.some(error => error.path === expected)).toBe(true);
+    if (!result.ok && path.startsWith('loans.')) expect(result.errors.every(error => error.message.startsWith(path === 'loans.0.name' ? 'Loan 1:' : 'Loan "Loan":'))).toBe(true);
+  });
+  it('reports a disbursement after repayment start by loan id and loan name', () => {
+    const p = plan(); p.loans.push({ ...p.loans[0], id: 'late', name: 'Summer loan', disbursementDate: '2026-03-01' });
+    const result = calculateProjection(p);
+    expect(result).toEqual({ ok: false, errors: [{ path: 'loans.late.disbursementDate', code: 'OUT_OF_RANGE', message: 'Loan "Summer loan": disbursement (2026-03-01) must be on or before repayment starts (2026-01-01).' }] });
   });
   it('handles malformed top-level values and duplicate IDs', () => {
     expect(calculateProjection(undefined as unknown as Plan).ok).toBe(false);

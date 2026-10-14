@@ -13,9 +13,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createDefaultPlan, reconcileSchoolYears } from '../engine/planner';
 import { pruneDanglingReferences } from '../engine/paths';
-import type { PlannerDocument, PlannerPlan, PlannerStore, Result, SaveResult, SaveStatus, StorageLike } from '../engine/planner-contracts';
-import { UNAVAILABLE_NOTICE, deleteDocument, importDocument, loadDocument, probeStorage, saveDocumentDetailed, serializeDocument } from '../data/storage';
-import { validatePlannerPlan } from '../data/validation';
+import type { FieldError, PlannerDocument, PlannerPlan, PlannerStore, Result, SaveResult, SaveStatus, StorageLike } from '../engine/planner-contracts';
+import { UNAVAILABLE_NOTICE, deleteDocument, importDocumentDetailed, loadDocument, probeStorage, saveDocumentDetailed, serializeDocument } from '../data/storage';
+import { DISBURSEMENT_PATH, repaymentStartDate, validatePlannerPlan } from '../data/validation';
 
 export const DEFAULT_SAVE_DEBOUNCE_MS = 250;
 
@@ -39,18 +39,47 @@ function initialize(storage: StorageLike | undefined): Initial {
   if (loaded.preservedUnreadable) {
     return { document: freshDocument(), paused: true, status: { state: 'paused', message: loaded.notice, savedAt: null } };
   }
-  if (loaded.notice) {
+  // A repaired older plan loads normally; the notice names each change. The stored text is not
+  // rewritten until the user's first edit (dirty stays false), so merely opening the app changes nothing.
+  const repaired = loaded.repairs.length > 0;
+  if (loaded.notice && !repaired) {
     return { document: loaded.document ?? freshDocument(), paused: false, status: { state: 'unavailable', message: loaded.notice, savedAt: null } };
   }
   // Storage that can be read but not written (private modes, full quota): say so before the first edit.
   if (!probeStorage(storage)) {
-    return { document: loaded.document ?? freshDocument(), paused: false, status: { state: 'unavailable', message: UNAVAILABLE_NOTICE, savedAt: null } };
+    const message = repaired ? `${loaded.notice} ${UNAVAILABLE_NOTICE}` : UNAVAILABLE_NOTICE;
+    return { document: loaded.document ?? freshDocument(), paused: false, status: { state: 'unavailable', message, savedAt: null } };
   }
-  return { document: loaded.document ?? freshDocument(), paused: false, status: { state: 'saved', message: null, savedAt: null } };
+  return { document: loaded.document ?? freshDocument(), paused: false, status: { state: 'saved', message: repaired ? loaded.notice : null, savedAt: null } };
 }
 
 const datesChanged = (before: PlannerPlan, after: PlannerPlan): boolean =>
   before.settings.startDate !== after.settings.startDate || before.settings.graduationDate !== after.settings.graduationDate;
+
+/**
+ * A loan disbursed after repayment start is reported at 'loans.<id>.disbursementDate'. When the edit
+ * that caused it changed graduation or grace (and not that loan's date), the user is editing the
+ * settings field, so the error is moved there and names the affected loans.
+ */
+function attributeDisbursementErrors(before: PlannerPlan, after: PlannerPlan, errors: FieldError[]): FieldError[] {
+  const settingsKey = before.settings.graduationDate !== after.settings.graduationDate ? 'graduationDate'
+    : before.settings.graceMonths !== after.settings.graceMonths ? 'graceMonths' : null;
+  if (!settingsKey) return errors;
+  const blocked: string[] = [];
+  const rest = errors.filter(error => {
+    const loanId = DISBURSEMENT_PATH.exec(error.path)?.[1];
+    if (loanId === undefined) return true;
+    const previous = before.loans.find(loan => loan.id === loanId);
+    const loan = after.loans.find(entry => entry.id === loanId);
+    if (!previous || !loan || previous.disbursementDate !== loan.disbursementDate) return true;
+    blocked.push(`"${loan.name}" (${loan.disbursementDate})`);
+    return false;
+  });
+  if (!blocked.length) return errors;
+  const start = repaymentStartDate(after.settings);
+  const message = `Repayment would start ${start}, before ${blocked.length === 1 ? 'loan' : 'loans'} ${blocked.join(', ')} ${blocked.length === 1 ? 'is' : 'are'} disbursed. Move the disbursement ${blocked.length === 1 ? 'date' : 'dates'} earlier or remove the ${blocked.length === 1 ? 'loan' : 'loans'} first.`;
+  return [{ path: `settings.${settingsKey}`, code: 'OUT_OF_RANGE', message }, ...rest];
+}
 
 export function usePlannerDocument(options: PlannerDocumentOptions = {}): PlannerStore {
   // Options are read once; changing them after mount has no effect.
@@ -129,7 +158,7 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): Planne
     const checked = validatePlannerPlan(next);
     if (!checked.ok) {
       pendingUndoRef.current = null;
-      return checked;
+      return { ok: false, errors: attributeDisbursementErrors(current.plan, next, checked.errors) };
     }
     // One-level undo: a marked (destructive) edit offers undo; any other edit retires it so undo
     // can never silently discard later work.
@@ -149,7 +178,7 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): Planne
   }, []);
 
   const importText = useCallback((text: string): Result<PlannerDocument> => {
-    const result = importDocument(text);
+    const { result, repairs } = importDocumentDetailed(text);
     if (!result.ok) return result;
     setUndoSnapshot({ label: 'Import', document: documentRef.current });
     pendingUndoRef.current = null;
@@ -159,6 +188,11 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): Planne
     setDocument(result.value);
     dirtyRef.current = true;
     flush();
+    if (repairs.length) {
+      // Keep the save outcome (saved / unavailable) and prepend what was changed to make the file projectable.
+      const repairText = repairs.join(' ');
+      setSaveStatus(previous => ({ ...previous, message: previous.message ? `${repairText} ${previous.message}` : repairText }));
+    }
     return result;
   }, [flush]);
 

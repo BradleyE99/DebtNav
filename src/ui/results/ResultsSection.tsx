@@ -1,9 +1,12 @@
 import type { Comparison } from '../../engine/planner-contracts';
+import { revealField } from '../reveal';
 import { D, money, sum } from '../../engine/money';
 import { usePlanner } from '../PlannerContext';
 import { Explain, Metric, TableRegion } from '../common/common';
 import { formatCurrency, formatDate, formatMonthYear, plural, strategyName } from '../format';
 import { BalanceChart } from './BalanceChart';
+import { fieldIdForPath } from '../planUpdates';
+import { projectable } from './comparison';
 import { AmortizationSchedule } from './AmortizationSchedule';
 
 /** "+$640.00 interest, +3 months" relative to the lowest-interest option (neutral wording, US-604). */
@@ -16,41 +19,80 @@ export function differenceText(comparison: Comparison): string {
 }
 
 export function ResultsSection() {
-  const { plan, projection, projectionErrors, comparisons, comparisonsUpdating } = usePlanner();
+  const { plan, projection, projectionErrors, comparisons, comparisonsUpdating, projectionUpdating, repaymentUnavailable } = usePlanner();
+  const hasRepayment = Boolean(projection?.repayment);
   return (
-    <section id="results" className="panel results" aria-labelledby="results-heading">
+    <section id="results" className={projectionUpdating ? 'panel results is-recalculating' : 'panel results'} aria-labelledby="results-heading" aria-busy={projectionUpdating || undefined}>
       <h2 id="results-heading">Your live results</h2>
       <p className="section-intro">Results update as you type. If a field shows an error, results use its last valid value.</p>
       {!projection && (
         <div className="notice notice--warning" role="alert">
           <p><strong>Results can't be calculated yet.</strong></p>
-          <ul>{projectionErrors.map(error => <li key={`${error.path}-${error.message}`}>{error.message}</li>)}</ul>
+          <ul>{projectionErrors.map(error => <ProjectionErrorItem key={`${error.path}-${error.message}`} path={error.path} message={error.message} />)}</ul>
+        </div>
+      )}
+      {projection && repaymentUnavailable && (
+        <div className="notice notice--warning" role="alert">
+          <span className="notice-icon" aria-hidden="true">!</span>
+          <div className="notice-body">
+            <p><strong>Repayment can't be projected yet.</strong> Borrowing gaps and the school-year summary below are still up to date.</p>
+            <ul>{projectionErrors.map(error => <ProjectionErrorItem key={`${error.path}-${error.message}`} path={error.path} message={error.message} />)}</ul>
+          </div>
         </div>
       )}
       {projection && (
         <>
-          <Summary />
+          {hasRepayment && <Summary />}
           <YearSummaryTable />
-          <LoanTable />
-          <div className={comparisonsUpdating ? 'is-updating' : undefined} aria-busy={comparisonsUpdating}>
-            {comparisonsUpdating && <p className="updating" aria-hidden="true">Updating comparisons…</p>}
-            <StrategyComparison />
-            {plan.scenarios.length > 0 && <ScenarioComparison />}
-            {comparisons && <BalanceChart />}
-          </div>
+          {hasRepayment && (
+            <>
+              <LoanTable />
+              <div className={comparisonsUpdating ? 'is-updating' : undefined} aria-busy={comparisonsUpdating}>
+                {comparisonsUpdating && <p className="updating" aria-hidden="true">Updating comparisons…</p>}
+                <StrategyComparison />
+                {plan.scenarios.length > 0 && <ScenarioComparison />}
+                {comparisons && <BalanceChart />}
+              </div>
+            </>
+          )}
           <Timeline />
-          <AmortizationSchedule />
+          {hasRepayment && <AmortizationSchedule />}
         </>
       )}
     </section>
   );
 }
 
+/** One projection error, named after the record it belongs to and linked to its field. */
+function ProjectionErrorItem({ path, message }: { path: string; message: string }) {
+  const { plan } = usePlanner();
+  const fieldId = fieldIdForPath(plan, path);
+  const loan = plan.loans.find(item => fieldId.startsWith(`loans.${item.id}.`));
+  // Link to record fields (loans, years, events, settings); the element is looked up when clicked.
+  const linkable = /^(loans|schoolYears|lifeEvents|settings|postGradIncome|repayment)\./.test(fieldId);
+  return (
+    <li>
+      {loan && !message.includes(loan.name) ? <><strong>{loan.name}:</strong> </> : null}{message}{' '}
+      {linkable && (
+        <a href={`#${fieldId}`} onClick={event => {
+          // Expands a collapsed loan card if needed, then focuses the field.
+          if (revealField(fieldId)) event.preventDefault();
+        }}>
+          Go to the field
+        </a>
+      )}
+    </li>
+  );
+}
+
 function Summary() {
   const { plan, projection } = usePlanner();
-  if (!projection) return null;
-  const repayment = projection.repayment;
-  const negative = repayment.warnings.some(warning => warning.code === 'NEGATIVE_AMORTIZATION' || warning.code === 'NON_AMORTIZING') || repayment.status === 'notAmortizing';
+  const repayment = projection?.repayment;
+  if (!projection || !repayment) return null;
+  // Only a projection that stops (status notAmortizing) has no debt-free date; temporary negative
+  // amortization (e.g. until a raise) is shown as the engine's own warning next to the date.
+  const negative = repayment.status === 'notAmortizing';
+  const isAmortizationWarning = (code: string) => code === 'NEGATIVE_AMORTIZATION' || code === 'NON_AMORTIZING';
   const totalBorrowed = money(sum(plan.loans.map(loan => loan.principal)));
   const debtFree = repayment.debtFreeDate
     ? formatMonthYear(repayment.debtFreeDate)
@@ -71,7 +113,7 @@ function Summary() {
           <p><strong>Your payments don't cover the interest.</strong> At least one balance grows instead of shrinking, so there is no debt-free date. Increase your monthly amount or change the loan terms.</p>
         </div>
       )}
-      {repayment.warnings.filter(warning => warning.code !== 'NEGATIVE_AMORTIZATION' && warning.code !== 'NON_AMORTIZING').map(warning => (
+      {repayment.warnings.filter(warning => !(negative && isAmortizationWarning(warning.code))).map(warning => (
         <p key={`${warning.code}-${warning.loanId ?? ''}`} className="notice notice--warning">{warning.message}</p>
       ))}
       {projection.notices.map(notice => <p key={notice} className="field-hint">{notice}</p>)}
@@ -118,7 +160,7 @@ function YearSummaryTable() {
 
 function LoanTable() {
   const { plan, projection } = usePlanner();
-  if (!projection || projection.repayment.loans.length === 0) return null;
+  if (!projection?.repayment || projection.repayment.loans.length === 0) return null;
   const name = (id: string) => plan.loans.find(loan => loan.id === id)?.name ?? 'Loan';
   return (
     <>
@@ -207,11 +249,17 @@ function ScenarioComparison() {
           <tbody>
             <tr>
               <th scope="row">Base plan</th>
-              <td>{projection.repayment.debtFreeDate ? formatMonthYear(projection.repayment.debtFreeDate) : 'No debt-free date'}</td>
-              <td>{formatCurrency(projection.repayment.totalInterestPaid)}</td>
+              <td>{projection.repayment?.debtFreeDate ? formatMonthYear(projection.repayment.debtFreeDate) : 'No debt-free date'}</td>
+              <td>{formatCurrency(projection.repayment?.totalInterestPaid)}</td>
               <td>—</td>
             </tr>
-            {comparisons.scenarioComparisons.map(item => (
+            {comparisons.scenarioFailures.map(failure => (
+              <tr key={failure.id}>
+                <th scope="row">{failure.name}</th>
+                <td colSpan={3}>Can't be projected: {failure.reason}</td>
+              </tr>
+            ))}
+            {comparisons.scenarioComparisons.filter(projectable).map(item => (
               <tr key={item.id}>
                 <th scope="row">{item.name}</th>
                 <td>{item.projection.debtFreeDate ? formatMonthYear(item.projection.debtFreeDate) : 'No debt-free date'}</td>

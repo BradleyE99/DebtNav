@@ -44,11 +44,11 @@ describe('saving and loading', () => {
     const envelope = JSON.parse(storage.data.get(STORAGE_KEY)!);
     expect(envelope).toMatchObject({ app: 'debtnav', schemaVersion: 3 });
     expect(Number.isFinite(Date.parse(envelope.savedAt))).toBe(true);
-    expect(loadDocument(storage)).toEqual({ document, notice: null, preservedUnreadable: false });
+    expect(loadDocument(storage)).toEqual({ document, notice: null, preservedUnreadable: false, repairs: [] });
   });
 
   it('returns no document and no notice when nothing is stored', () => {
-    expect(loadDocument(memory())).toEqual({ document: null, notice: null, preservedUnreadable: false });
+    expect(loadDocument(memory())).toEqual({ document: null, notice: null, preservedUnreadable: false, repairs: [] });
   });
 
   it('preserves unreadable stored data and flags it', () => {

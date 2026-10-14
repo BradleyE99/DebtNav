@@ -70,3 +70,22 @@ export function yearHasData(plan: PlannerPlan, year: PlannerYear): boolean {
     || plan.loans.some(loan => loan.schoolYearId === year.id)
     || plan.lifeEvents.some(event => event.schoolYearId === year.id);
 }
+
+/**
+ * Converts an engine error path to the UI field id (record-id path). Accepts both id paths
+ * ('loans.<id>.disbursementDate') and legacy index paths ('loans.0.disbursementDate').
+ */
+export function fieldIdForPath(plan: PlannerPlan, path: string): string {
+  const match = /^loans\.(\d+)\.(.+)$/.exec(path);
+  // A loan whose id is all digits is addressed by id, never by index.
+  if (match && !plan.loans.some(loan => loan.id === match[1])) {
+    const loan = plan.loans[Number(match[1])];
+    if (loan) return `loans.${loan.id}.${match[2]}`;
+  }
+  return path;
+}
+
+/** Engine errors that belong to one loan's fields. */
+export function errorsForLoan<E extends { path: string }>(plan: PlannerPlan, errors: readonly E[], loanId: string): E[] {
+  return errors.filter(error => fieldIdForPath(plan, error.path).startsWith(`loans.${loanId}.`));
+}

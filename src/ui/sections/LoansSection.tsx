@@ -1,49 +1,99 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import type { PlannerLoan } from '../../engine/planner-contracts';
 import type { InSchoolInterestPayment, LoanType } from '../../engine/contracts';
 import { D, money, sum } from '../../engine/money';
+import { federalReference } from '../../policy/reference';
+import { formatRatePercent } from '../../data/parse';
 import { usePlanner } from '../PlannerContext';
 import {
   CheckboxField, DateField, IntegerField, MoneyField, OptionalMoneyField, RateField, SelectField, TextField,
 } from '../fields/fields';
+import { useFieldStatus } from '../fields/fieldStatus';
 import { Explain } from '../common/common';
-import { LOAN_TYPE_LABELS, formatCurrency } from '../format';
-import { updateLoan } from '../planUpdates';
+import { LOAN_TYPE_LABELS, formatCurrency, plural } from '../format';
+import { errorsForLoan, fieldIdForPath, updateLoan } from '../planUpdates';
+import { onRevealRequest } from '../reveal';
 import { newId } from '../ids';
+import './loans.css';
 
 const loanTypeOptions = Object.entries(LOAN_TYPE_LABELS) as [LoanType, string][];
+
+/** Name shown in a loan's summary; blank or whitespace-only names get a numbered fallback. */
+function loanDisplayName(loan: PlannerLoan, index: number): string {
+  return loan.name.trim() || `Unnamed loan ${index + 1}`;
+}
+
+/** Loan id addressed by a field id such as `loans.<loanId>.principal`, or null. */
+function loanIdFromFieldId(fieldId: string): string | null {
+  const match = /^loans\.([^.]+)\./.exec(fieldId);
+  return match ? match[1] : null;
+}
+
+/** `ids` with `id` opened or closed; returns the same set when nothing changes. */
+function withOpen(ids: ReadonlySet<string>, id: string, open: boolean): ReadonlySet<string> {
+  if (ids.has(id) === open) return ids;
+  const next = new Set(ids);
+  if (open) next.add(id); else next.delete(id);
+  return next;
+}
 
 export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string | null; onFocused(): void }) {
   const { plan, update, projection } = usePlanner();
   const totalDebt = money(sum(plan.loans.map(loan => loan.principal)));
   const payers = plan.loans.filter(loan => loan.payInterestWhileInSchool && loan.type !== 'subsidized');
   const inSchoolMonthly = payers.length
-    ? money(sum(payers.map(loan => inSchoolCost(loan, projection?.repayment.inSchoolInterestPayments ?? null).monthly)))
+    ? money(sum(payers.map(loan => inSchoolCost(loan, projection?.repayment?.inSchoolInterestPayments ?? null).monthly)))
     : null;
 
-  // When a loan is created (here or from a year's gap), move focus to its first field so it "opens" for editing.
+  // Which loan cards are expanded. UI-only state (never stored in the plan); existing loans start collapsed.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  // A loan added here that should receive focus once it has opened.
+  const pendingFocusRef = useRef<string | null>(null);
+
+  // Drop ids of loans that no longer exist (adjusting state during render, without an extra effect pass).
+  const loanIds = new Set(plan.loans.map(loan => loan.id));
+  if ([...expanded].some(id => !loanIds.has(id))) {
+    setExpanded(new Set([...expanded].filter(id => loanIds.has(id))));
+  }
+
+  // A loan created from a year's gap opens; the effect below then focuses its name field.
+  if (focusLoanId && loanIds.has(focusLoanId) && !expanded.has(focusLoanId)) {
+    setExpanded(withOpen(expanded, focusLoanId, true));
+  }
   useEffect(() => {
-    if (!focusLoanId) return;
-    const element = document.getElementById(`loans.${focusLoanId}.name`);
-    if (element) {
-      element.focus();
-      element.scrollIntoView?.({ block: 'center' });
-      onFocused();
-    }
-  }, [focusLoanId, plan.loans, onFocused]);
+    const target = pendingFocusRef.current ?? focusLoanId;
+    if (!target || !expanded.has(target)) return;
+    const element = document.getElementById(`loans.${target}.name`);
+    if (!element) return;
+    element.focus();
+    element.scrollIntoView?.({ block: 'center' });
+    if (target === pendingFocusRef.current) pendingFocusRef.current = null;
+    if (target === focusLoanId) onFocused();
+  }, [focusLoanId, expanded, onFocused]);
+
+  // "Go to the field" links elsewhere ask collapsed containers to reveal a field.
+  useEffect(() => onRevealRequest(fieldId => {
+    const loanId = loanIdFromFieldId(fieldId);
+    if (loanId) flushSync(() => setExpanded(current => withOpen(current, loanId, true)));
+  }), []);
 
   function addLoan() {
     const id = newId();
     update(p => ({
       ...p,
       loans: [...p.loans, {
-        id, name: `Loan ${p.loans.length + 1}`, type: 'unsubsidized', principal: '0.00', annualRate: '0.0639',
+        id, name: `Loan ${p.loans.length + 1}`, type: 'unsubsidized', principal: '0.00', annualRate: federalReference.interestRates.undergraduateDirect.rate,
         disbursementDate: p.settings.startDate, termMonths: 120, payInterestWhileInSchool: false, capitalizeInterest: true,
       }],
       repayment: { ...p.repayment, customOrder: [...p.repayment.customOrder, id] },
     }));
-    requestAnimationFrame(() => document.getElementById(`loans.${id}.name`)?.focus());
+    pendingFocusRef.current = id;
+    setExpanded(current => withOpen(current, id, true));
   }
+
+  const allExpanded = plan.loans.length > 0 && plan.loans.every(loan => expanded.has(loan.id));
+  const noneExpanded = plan.loans.every(loan => !expanded.has(loan.id));
 
   return (
     <section id="loans" className="panel" aria-labelledby="loans-heading">
@@ -54,7 +104,23 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
         <p className="computed">In-school interest you pay: about <strong>{formatCurrency(inSchoolMonthly)} per month</strong> while in school and grace.</p>
       )}
       {plan.loans.length === 0 && <p className="empty">No loans yet.</p>}
-      {plan.loans.map((loan, index) => <LoanCard key={loan.id} loan={loan} index={index} />)}
+      {plan.loans.length > 0 && (
+        <div className="loan-list-controls" role="group" aria-label="Show or hide loan details">
+          <button type="button" className="loan-list-control" aria-disabled={allExpanded || undefined}
+            onClick={() => { if (!allExpanded) setExpanded(new Set(plan.loans.map(loan => loan.id))); }}>
+            Expand all
+          </button>
+          <button type="button" className="loan-list-control" aria-disabled={noneExpanded || undefined}
+            onClick={() => { if (!noneExpanded) setExpanded(new Set()); }}>
+            Collapse all
+          </button>
+        </div>
+      )}
+      <div className="loan-list">
+        {plan.loans.map((loan, index) => (
+          <LoanCard key={loan.id} loan={loan} index={index} open={expanded.has(loan.id)} onToggle={() => setExpanded(current => withOpen(current, loan.id, !current.has(loan.id)))} />
+        ))}
+      </div>
       <button type="button" className="button-primary" onClick={addLoan} disabled={plan.loans.length >= 50}>Add loan</button>
       {plan.loans.length >= 50 && <p className="field-hint">You have reached the 50-loan limit.</p>}
       <Explain>
@@ -67,70 +133,120 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
   );
 }
 
-function LoanCard({ loan, index }: { loan: PlannerLoan; index: number }) {
-  const { plan, update, remove, projection } = usePlanner();
+function LoanCard({ loan, index, open, onToggle }: { loan: PlannerLoan; index: number; open: boolean; onToggle(): void }) {
+  const { plan, update, remove, projection, projectionErrors } = usePlanner();
+  const { invalidFieldIds, FieldStatusProvider } = useFieldStatus();
   const base = `loans.${loan.id}`;
+  const loanErrors = errorsForLoan(plan, projectionErrors, loan.id);
   const patch = (value: Partial<PlannerLoan>) => update(p => updateLoan(p, loan.id, value));
   const headingId = `${base}-heading`;
+  const nameId = `${base}-title`;
+  const detailsId = `${base}-details`;
+  const attentionId = `${base}-attention`;
+  const displayName = loanDisplayName(loan, index);
   const yearIndex = loan.schoolYearId ? plan.schoolYears.findIndex(year => year.id === loan.schoolYearId) : -1;
   const yearSummary = projection?.years.find(year => year.mismatchLoanIds.includes(loan.id));
-  const atRepayment = projection?.repayment.loans.find(item => item.loanId === loan.id);
+  const atRepayment = projection?.repayment?.loans.find(item => item.loanId === loan.id);
   const accrues = loan.type === 'unsubsidized' || ((loan.type === 'private' || loan.type === 'other') && loan.accruesInterestInSchool !== false);
-  const inSchool = inSchoolCost(loan, projection?.repayment.inSchoolInterestPayments ?? null);
+  const inSchool = inSchoolCost(loan, projection?.repayment?.inSchoolInterestPayments ?? null);
+
+  // Fields needing attention: fields showing an error (including invalid drafts that were never saved)
+  // plus engine problems tied to a field. Engine problems without a field still flag the loan.
+  const attentionFields = new Set(invalidFieldIds);
+  for (const error of loanErrors) attentionFields.add(fieldIdForPath(plan, error.path));
+  const attention = attentionFields.size > 0
+    ? `Needs attention: ${plural(attentionFields.size, 'field')}`
+    : null;
 
   return (
-    <article className="loan-card" aria-labelledby={headingId}>
-      <h3 id={headingId}>{loan.name || `Loan ${index + 1}`} <span className="subtle">{LOAN_TYPE_LABELS[loan.type]}{yearIndex >= 0 ? ` · from Year ${yearIndex + 1} gap` : ''}</span></h3>
-      {yearSummary && (
-        <p className="notice notice--warning">
-          Year {plan.schoolYears.findIndex(year => year.id === yearSummary.yearId) + 1}'s gap + buffer is now {formatCurrency(yearSummary.bufferedGap)}, but this loan was created for {formatCurrency(loan.gapAtCreation)} and is {formatCurrency(loan.principal)}. The loan was not changed — edit the principal if you want them to match.
+    <article className={`loan-card${open ? ' loan-card--open' : ''}${attention ? ' loan-card--attention' : ''}`} aria-labelledby={nameId}>
+      <h3 id={headingId} className="loan-card__heading">
+        <button type="button" className="loan-card__toggle" aria-expanded={open} aria-controls={detailsId}
+          aria-describedby={attention ? attentionId : undefined} onClick={onToggle}>
+          <span className="loan-card__title">
+            <span id={nameId} className="loan-card__name">{displayName}</span>
+            <span className="loan-card__type">{LOAN_TYPE_LABELS[loan.type]}{yearIndex >= 0 ? ` · from Year ${yearIndex + 1} gap` : ''}</span>
+          </span>
+          <span className="loan-card__summary">
+            <span className="loan-card__figure"><span className="loan-card__label">Principal</span> <span className="loan-card__value">{formatCurrency(loan.principal)}</span></span>
+            <span className="loan-card__figure"><span className="loan-card__label">Annual rate</span> <span className="loan-card__value">{formatRatePercent(loan.annualRate)}%</span></span>
+            {atRepayment && (
+              <span className="loan-card__figure"><span className="loan-card__label">Balance at repayment</span> <span className="loan-card__value">{formatCurrency(atRepayment.balanceAtRepaymentStart)}</span></span>
+            )}
+          </span>
+          <span className="loan-card__chevron" aria-hidden="true" />
+        </button>
+      </h3>
+      {attention && (
+        <p id={attentionId} className="loan-card__attention">
+          <span className="loan-card__attention-icon" aria-hidden="true">!</span>
+          {attention}
+          {loanErrors.length > 0 ? ' (repayment can’t be projected)' : ''}
         </p>
       )}
-      <div className="field-grid">
-        <TextField id={`${base}.name`} label="Loan name" value={loan.name} onCommit={name => patch({ name })} />
-        <SelectField id={`${base}.type`} label="Loan type" options={loanTypeOptions} value={loan.type} onCommit={type => patch({ type })} />
-        <MoneyField id={`${base}.principal`} label="Amount borrowed (principal)" value={loan.principal} onCommit={principal => patch({ principal })} />
-        <RateField id={`${base}.annualRate`} label="Annual interest rate" hint="0–30%." value={loan.annualRate} onCommit={annualRate => patch({ annualRate })} />
-        <DateField id={`${base}.disbursementDate`} label="Disbursement date" value={loan.disbursementDate} onCommit={disbursementDate => patch({ disbursementDate })} />
-        <IntegerField id={`${base}.termMonths`} label="Repayment term (months)" hint="120 months = 10 years." min={1} max={1200} value={loan.termMonths} onCommit={termMonths => patch({ termMonths })} />
-        <OptionalMoneyField id={`${base}.monthlyPayment`} label="Fixed monthly payment (optional)" hint="Leave blank to use the calculated minimum."
-          value={loan.monthlyPayment} onCommit={monthlyPayment => patch({ monthlyPayment })} />
+      <div id={detailsId} className="loan-card__details" hidden={!open}>
+        <FieldStatusProvider>
+          {yearSummary && (
+            <p className="notice notice--warning">
+              Year {plan.schoolYears.findIndex(year => year.id === yearSummary.yearId) + 1}'s gap + buffer is now {formatCurrency(yearSummary.bufferedGap)}, but this loan was created for {formatCurrency(loan.gapAtCreation)} and is {formatCurrency(loan.principal)}. The loan was not changed — edit the principal if you want them to match.
+            </p>
+          )}
+          {loanErrors.length > 0 && (
+            <div className="notice notice--warning" role="alert">
+              <span className="notice-icon" aria-hidden="true">!</span>
+              <p><strong>Repayment can't be projected because of this loan:</strong> {loanErrors.map(error => error.message).join(' ')}</p>
+            </div>
+          )}
+          <div className="field-grid">
+            <TextField id={`${base}.name`} label="Loan name" value={loan.name} onCommit={name => patch({ name })} />
+            <SelectField id={`${base}.type`} label="Loan type" options={loanTypeOptions} value={loan.type} onCommit={type => patch({ type })} />
+            <MoneyField id={`${base}.principal`} label="Amount borrowed (principal)" value={loan.principal} onCommit={principal => patch({ principal })} />
+            <RateField id={`${base}.annualRate`} label="Annual interest rate" hint="0–30%." value={loan.annualRate} onCommit={annualRate => patch({ annualRate })} />
+            <DateField id={`${base}.disbursementDate`} label="Disbursement date" value={loan.disbursementDate}
+              externalError={loanErrors.find(error => fieldIdForPath(plan, error.path) === `${base}.disbursementDate`)?.message} onCommit={disbursementDate => patch({ disbursementDate })} />
+            <IntegerField id={`${base}.termMonths`} label="Repayment term (months)" hint="120 months = 10 years." min={1} max={1200} value={loan.termMonths} onCommit={termMonths => patch({ termMonths })} />
+            <OptionalMoneyField id={`${base}.monthlyPayment`} label="Fixed monthly payment (optional)" hint="Leave blank to use the calculated minimum."
+              value={loan.monthlyPayment} onCommit={monthlyPayment => patch({ monthlyPayment })} />
+          </div>
+          <div className="check-group">
+            {loan.type === 'subsidized' ? (
+              <p className="field-hint">Subsidized: no interest accrues during school and grace, so there is no in-school interest to pay.</p>
+            ) : (
+              <CheckboxField id={`${base}.payInterestWhileInSchool`} label="I pay interest while in school"
+                hint={loan.payInterestWhileInSchool && accrues
+                  ? `You pay about ${formatCurrency(inSchool.monthly)} per month in school and grace${inSchool.count ? ` (${inSchool.count} payments, ${formatCurrency(inSchool.total)} in all)` : ''}. Nothing is added to the balance.`
+                  : 'If you pay the interest as it accrues, nothing capitalizes and the payment is shown as a monthly cost.'}
+                value={Boolean(loan.payInterestWhileInSchool)} onCommit={payInterestWhileInSchool => patch({ payInterestWhileInSchool })} />
+            )}
+            <CheckboxField id={`${base}.capitalizeInterest`} label="Add unpaid interest to the balance at repayment (capitalization)"
+              hint="Modeling assumption. Turn off to keep accrued interest separate from principal."
+              value={loan.capitalizeInterest !== false} onCommit={capitalizeInterest => patch({ capitalizeInterest })} />
+            {(loan.type === 'private' || loan.type === 'other') && (
+              <CheckboxField id={`${base}.accruesInterestInSchool`} label="Interest accrues while in school"
+                hint="Most private loans accrue from disbursement. Turn off only if your lender says otherwise."
+                value={loan.accruesInterestInSchool !== false} onCommit={accruesInterestInSchool => patch({ accruesInterestInSchool })} />
+            )}
+          </div>
+          {atRepayment && (
+            <dl className="inline-figures">
+              <div><dt>Interest before repayment</dt><dd>{formatCurrency(atRepayment.accruedInterest)}</dd></div>
+              {loan.payInterestWhileInSchool && accrues && <div><dt>In-school interest you pay</dt><dd>{formatCurrency(inSchool.monthly)}/mo</dd></div>}
+              <div><dt>Interest added at repayment</dt><dd>{formatCurrency(atRepayment.capitalizedInterest)}</dd></div>
+              <div><dt>Balance at repayment</dt><dd>{formatCurrency(atRepayment.balanceAtRepaymentStart)}</dd></div>
+              <div><dt>Minimum monthly payment</dt><dd>{formatCurrency(atRepayment.minimumMonthlyPayment)}</dd></div>
+            </dl>
+          )}
+          <div className="loan-card__actions">
+            <button type="button" className="button-danger"
+              onClick={() => {
+                remove(`Remove loan "${displayName}"`, p => ({ ...p, loans: p.loans.filter(item => item.id !== loan.id) }));
+                requestAnimationFrame(() => document.getElementById('loans-heading')?.focus());
+              }}>
+              Remove loan<span className="visually-hidden"> {displayName}</span>
+            </button>
+          </div>
+        </FieldStatusProvider>
       </div>
-      <div className="check-group">
-        {loan.type === 'subsidized' ? (
-          <p className="field-hint">Subsidized: no interest accrues during school and grace, so there is no in-school interest to pay.</p>
-        ) : (
-          <CheckboxField id={`${base}.payInterestWhileInSchool`} label="I pay interest while in school"
-            hint={loan.payInterestWhileInSchool && accrues
-              ? `You pay about ${formatCurrency(inSchool.monthly)} per month in school and grace${inSchool.count ? ` (${inSchool.count} payments, ${formatCurrency(inSchool.total)} in all)` : ''}. Nothing is added to the balance.`
-              : 'If you pay the interest as it accrues, nothing capitalizes and the payment is shown as a monthly cost.'}
-            value={Boolean(loan.payInterestWhileInSchool)} onCommit={payInterestWhileInSchool => patch({ payInterestWhileInSchool })} />
-        )}
-        <CheckboxField id={`${base}.capitalizeInterest`} label="Add unpaid interest to the balance at repayment (capitalization)"
-          hint="Modeling assumption. Turn off to keep accrued interest separate from principal."
-          value={loan.capitalizeInterest !== false} onCommit={capitalizeInterest => patch({ capitalizeInterest })} />
-        {(loan.type === 'private' || loan.type === 'other') && (
-          <CheckboxField id={`${base}.accruesInterestInSchool`} label="Interest accrues while in school"
-            hint="Most private loans accrue from disbursement. Turn off only if your lender says otherwise."
-            value={loan.accruesInterestInSchool !== false} onCommit={accruesInterestInSchool => patch({ accruesInterestInSchool })} />
-        )}
-      </div>
-      {atRepayment && (
-        <dl className="inline-figures">
-          <div><dt>Interest before repayment</dt><dd>{formatCurrency(atRepayment.accruedInterest)}</dd></div>
-          {loan.payInterestWhileInSchool && accrues && <div><dt>In-school interest you pay</dt><dd>{formatCurrency(inSchool.monthly)}/mo</dd></div>}
-          <div><dt>Interest added at repayment</dt><dd>{formatCurrency(atRepayment.capitalizedInterest)}</dd></div>
-          <div><dt>Balance at repayment</dt><dd>{formatCurrency(atRepayment.balanceAtRepaymentStart)}</dd></div>
-          <div><dt>Minimum monthly payment</dt><dd>{formatCurrency(atRepayment.minimumMonthlyPayment)}</dd></div>
-        </dl>
-      )}
-      <button type="button" className="button-danger"
-        onClick={() => {
-          remove(`Remove loan "${loan.name}"`, p => ({ ...p, loans: p.loans.filter(item => item.id !== loan.id) }));
-          requestAnimationFrame(() => document.getElementById('loans-heading')?.focus());
-        }}>
-        Remove loan<span className="visually-hidden"> {loan.name}</span>
-      </button>
     </article>
   );
 }

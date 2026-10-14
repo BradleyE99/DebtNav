@@ -10,6 +10,7 @@ import {
   deleteDocument,
   exportDocument,
   importDocument,
+  importDocumentDetailed,
   loadDocument,
   probeStorage,
   saveDocument,
@@ -203,5 +204,78 @@ describe('deleting (US-1003)', () => {
     storage.removeItem = key => { if (key === STORAGE_KEY) throw new DOMException('denied', 'SecurityError'); remove(key); };
     expect(deleteDocument(storage).ok).toBe(false);
     expect(storage.getItem(LEGACY_STORAGE_KEYS[0])).toBeNull();
+  });
+});
+
+describe('repairing loans disbursed after repayment start (older dev builds)', () => {
+  /** A v3 envelope written without validation, as an earlier build could have. */
+  const legacyEnvelope = (mutate: (plan: PlannerPlan) => void, version = 3): string => {
+    const plan = createDefaultPlan();
+    plan.loans.push({ id: 'spring', name: 'Spring loan', type: 'private', principal: '1000.00', annualRate: '0.05', disbursementDate: '2031-01-10', termMonths: 120 });
+    mutate(plan);
+    return JSON.stringify({ app: 'debtnav', schemaVersion: version, savedAt: '2026-01-01T00:00:00.000Z', document: { plan, disclaimerDismissed: true } });
+  };
+  const MOVED = 'Loan "Spring loan" disbursement moved from 2031-01-10 to 2030-11-20 so it can be projected.';
+
+  it('load: moves the loan to the repayment start, explains it, and leaves the stored text alone', () => {
+    const raw = legacyEnvelope(() => {});
+    const storage = memory({ [STORAGE_KEY]: raw });
+    const loaded = loadDocument(storage);
+    expect(loaded.preservedUnreadable).toBe(false);
+    expect(loaded.repairs).toEqual([MOVED]);
+    expect(loaded.notice).toContain(MOVED);
+    expect(loaded.document!.plan.loans[0].disbursementDate).toBe('2030-11-20');
+    expect(storage.getItem(STORAGE_KEY)).toBe(raw);
+  });
+
+  it('load: any other validation failure still preserves and pauses', () => {
+    const raw = legacyEnvelope(plan => { plan.loans[0].principal = '-1.00'; });
+    const loaded = loadDocument(memory({ [STORAGE_KEY]: raw }));
+    expect(loaded).toMatchObject({ document: null, preservedUnreadable: true, repairs: [] });
+  });
+
+  it('import: repairs base loans and reports each change', () => {
+    const { result, repairs } = importDocumentDetailed(legacyEnvelope(plan => {
+      plan.loans.push({ id: 'late2', name: 'Summer loan', type: 'private', principal: '50.00', annualRate: '0.05', disbursementDate: '2032-06-01', termMonths: 60 });
+    }));
+    expect(result.ok).toBe(true);
+    expect(repairs).toEqual([MOVED, 'Loan "Summer loan" disbursement moved from 2032-06-01 to 2030-11-20 so it can be projected.']);
+  });
+
+  it('import: drops the scenario override that makes a loan late, keeping the rest of the scenario', () => {
+    const { result, repairs } = importDocumentDetailed(legacyEnvelope(plan => {
+      plan.loans[0].disbursementDate = '2030-08-01';
+      plan.scenarios.push({ id: 's1', name: 'No grace', overrides: { 'settings.graceMonths': 0, 'postGradIncome.annualSalary': '60000.00' } });
+      plan.scenarios.push({ id: 's2', name: 'Late loan', overrides: { 'loans.spring.disbursementDate': '2031-03-01' } });
+    }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.plan.loans[0].disbursementDate).toBe('2030-08-01');
+    expect(result.value.plan.scenarios.map(s => s.overrides)).toEqual([{ 'postGradIncome.annualSalary': '60000.00' }, {}]);
+    expect(repairs).toEqual([
+      'Scenario "No grace": removed the change to the grace period (0) so loan "Spring loan" can be projected.',
+      'Scenario "Late loan": removed the change to loan "Spring loan" disbursement date (2031-03-01) so loan "Spring loan" can be projected.',
+    ]);
+  });
+
+  it('import: a repaired base plan whose scenario is also affected is fully repaired', () => {
+    const { result, repairs } = importDocumentDetailed(legacyEnvelope(plan => {
+      plan.scenarios.push({ id: 's1', name: 'Short', overrides: { 'settings.graduationDate': '2029-05-20' } });
+    }));
+    expect(result.ok).toBe(true);
+    expect(repairs).toHaveLength(2);
+    expect(repairs[1]).toMatch(/Scenario "Short": removed the change to the graduation date/);
+  });
+
+  it('import: v2 files are migrated and repaired', () => {
+    const { result, repairs } = importDocumentDetailed(legacyEnvelope(() => {}, 2));
+    expect(result.ok).toBe(true);
+    expect(repairs).toEqual([MOVED]);
+  });
+
+  it('import: other errors are still rejected (nothing is repaired)', () => {
+    const { result, repairs } = importDocumentDetailed(legacyEnvelope(plan => { plan.settings.graceMonths = 13; }));
+    expect(result.ok).toBe(false);
+    expect(repairs).toEqual([]);
   });
 });

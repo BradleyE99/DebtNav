@@ -1,12 +1,11 @@
 import { useState, type DragEvent } from 'react';
-import type { StrategyId } from '../../engine/planner-contracts';
 import { usePlanner } from '../PlannerContext';
 import { IntegerField, MoneyField, PercentField, SelectField } from '../fields/fields';
 import { Explain } from '../common/common';
-import { STRATEGY_LABELS, formatCurrency, isPositive } from '../format';
+import { formatCurrency, isPositive, strategyName, strategyOptions } from '../format';
 import { effectiveCustomOrder, moveInCustomOrder } from '../planUpdates';
 
-const strategyOptions = Object.entries(STRATEGY_LABELS) as [StrategyId, string][];
+const STRATEGY_OPTIONS = strategyOptions();
 
 export function RepaymentSection() {
   const { plan, update, projection } = usePlanner();
@@ -20,10 +19,10 @@ export function RepaymentSection() {
         <MoneyField id="postGradIncome.monthlyDebtBudget" label="Monthly amount for all loans" hint="Total you can pay toward debt each month."
           value={plan.postGradIncome.monthlyDebtBudget}
           onCommit={monthlyDebtBudget => update(p => ({ ...p, postGradIncome: { ...p.postGradIncome, monthlyDebtBudget } }))} />
-        <PercentField id="postGradIncome.raiseAllocationPercent" label="Share of future raises put toward debt" hint="Default for new income-change events."
+        <PercentField id="postGradIncome.raiseAllocationPercent" label="Default share of raises put toward debt" hint="Starting value for “share of the change put toward debt” when you add an income-change event or switch an event to one. Each event keeps its own share; changing this does not alter existing events."
           max="100" value={plan.postGradIncome.raiseAllocationPercent}
           onCommit={raiseAllocationPercent => update(p => ({ ...p, postGradIncome: { ...p.postGradIncome, raiseAllocationPercent } }))} />
-        <SelectField id="repayment.strategyId" label="Payoff strategy" options={strategyOptions} value={plan.repayment.strategyId}
+        <SelectField id="repayment.strategyId" label="Payoff strategy" options={STRATEGY_OPTIONS} value={plan.repayment.strategyId}
           hint="Where money beyond the minimums goes first."
           onCommit={strategyId => update(p => ({ ...p, repayment: { ...p.repayment, strategyId } }))} />
         <IntegerField id="repayment.maxMonths" label="Projection horizon (months)" hint="1–1200. 360 months = 30 years." min={1} max={1200}
@@ -31,7 +30,7 @@ export function RepaymentSection() {
           onCommit={maxMonths => update(p => ({ ...p, repayment: { ...p.repayment, maxMonths } }))} />
       </div>
 
-      {projection && (
+      {projection && projection.minimumTotal !== null && (
         <div className="computed-block">
           <p className="computed">Sum of minimum payments: <strong>{formatCurrency(projection.minimumTotal)}</strong> per month</p>
           {isPositive(projection.paymentShortfall) && (
@@ -78,7 +77,7 @@ function CustomOrder() {
       <p>
         {plan.repayment.strategyId === 'custom'
           ? 'Extra payments follow this order exactly.'
-          : 'Used when the payoff strategy is "Custom order".'} Drag a loan, or use the Move up and Move down buttons.
+          : `Used when the payoff strategy is "${strategyName('custom')}".`} Drag a loan, or use the Move up and Move down buttons.
       </p>
       {order.length === 0 ? <p className="empty">Add loans to set a custom order.</p> : (
         <ol className="order-list" aria-labelledby="custom-order-heading">

@@ -10,7 +10,7 @@ export function AmortizationSchedule() {
   const { plan, projection } = usePlanner();
   const [loanId, setLoanId] = useState('all');
   const [requestedPage, setPage] = useState(0);
-  if (!projection) return null;
+  if (!projection?.repayment) return null;
   const schedule = projection.repayment.amortizationSchedule;
   const selected = loanId === 'all' || plan.loans.some(loan => loan.id === loanId) ? loanId : 'all';
   const rows = selected === 'all' ? schedule : schedule.filter(month => month.loans.some(loan => loan.loanId === selected));

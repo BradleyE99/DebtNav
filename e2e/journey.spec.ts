@@ -30,6 +30,12 @@ const costRows = (card: Locator) => card.locator('li.record').filter({ has: card
 const resourceRows = (card: Locator) => card.locator('li.record').filter({ has: card.page().locator('[id*=".resources."]') });
 const gapFigure = (card: Locator, label: string | RegExp) => card.locator('.gap-figures > div').filter({ hasText: label }).locator('dd');
 const loanCard = (page: Page, name: string | RegExp) => page.locator('article.loan-card').filter({ has: page.getByRole('heading', { name }) });
+/** Loan cards start collapsed after a reload; open one (its header button) before reading its fields. */
+async function openLoan(card: Locator) {
+  const toggle = card.locator('h3 button');
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
 const keyFigure = (page: Page, id: 'key-debt-free' | 'key-interest' | 'key-gap') => page.getByTestId(id);
 
 async function dismissDisclaimer(page: Page) {
@@ -348,6 +354,7 @@ test('complete planning journey with real typing, persistence, export/import and
     await expense.locator('select[id$=".schoolYearId"]').selectOption({ label: 'Year 2' });
     await retype(page, expense.locator('input[id$=".amount"]'), '1500');
     await expect(gapFigure(year2, 'Cost of attendance')).toHaveText('$24,881.00');
+    await expect(year2.locator('.subtotal-total dd')).toHaveText('$24,881.00');
 
     // New aid for Year 3: gap drops by $1,500 (US-704).
     const year3 = yearCard(page, 3);
@@ -453,10 +460,14 @@ test('complete planning journey with real typing, persistence, export/import and
     await expect(byId(page, 'settings.startDate')).toHaveValue('2026-08-26');
     await expect(byId(page, 'settings.graceMonths')).toHaveValue('6');
     await expect(costRows(year1).nth(1).locator('input[id$=".amount"]')).toHaveValue('10,500.00');
-    await expect(yearCard(page, 2).locator('.subtotal-total dd')).toHaveText('$23,381.00');
+    await expect(yearCard(page, 2).locator('.subtotal-total dd')).toHaveText('$24,881.00'); // items $23,381 + expense event $1,500 (m4)
+    await expect(yearCard(page, 2).locator('.subtotals')).toContainText('School expense events+$1,500.00');
     await expect(yearCard(page, 3).locator('.subtotal-total dd')).toHaveText('$20,500.00');
     await expect(resourceRows(year1).nth(1).locator('.record-result')).toHaveText('Counts as $6,750.00');
     await expect(year1.locator('input[id$=".bufferPercent"]')).toHaveValue('5');
+    await expect(page.locator('article.loan-card h3 button[aria-expanded="true"]')).toHaveCount(0); // collapsed after reload
+    await openLoan(loanCard(page, /^Year 1 loan/));
+    await openLoan(loanCard(page, /^Bank loan/));
     await expect(loanCard(page, /^Year 1 loan/).getByLabel('I pay interest while in school')).toBeChecked();
     await expect(loanCard(page, /^Bank loan/).locator('input[id$=".annualRate"]')).toHaveValue('9.5');
     await expect(byId(page, 'postGradIncome.annualSalary')).toHaveValue('60,000.00');
@@ -523,6 +534,68 @@ test('US-1001 storage unavailable: app still works and says data will not be sav
   await page.getByRole('button', { name: 'Add cost to Year 1' }).click();
   await retype(page, costRows(yearCard(page, 1)).nth(0).locator('input[id$=".amount"]'), '5000');
   await expect(yearCard(page, 1).locator('.subtotal-total dd')).toHaveText('$5,000.00');
+});
+
+// ------------------------------------------------------------------ independent review fixes
+
+test('review fixes: default raise share, disbursement-date validation, inert dialog, single save announcement', async ({ page }) => {
+  await dismissDisclaimer(page);
+  // M2: the default share seeds new income-change events.
+  await retype(page, byId(page, 'postGradIncome.raiseAllocationPercent'), '35');
+  await page.getByRole('button', { name: 'Add income change' }).click();
+  const income = page.locator('article.event-card').first();
+  await expect(income.locator('select[id$=".type"]')).toHaveValue('income');
+  await expect(income.locator('input[id$=".allocationPercent"]')).toHaveValue('35');
+  await expect(income.locator('.impact')).toHaveText(/^This event/);
+
+  // M1: a loan disbursed after repayment starts is rejected at its field; results stay.
+  await page.getByRole('button', { name: 'Add cost to Year 1' }).click();
+  await retype(page, costRows(yearCard(page, 1)).nth(0).locator('input[id$=".amount"]'), '20000');
+  await page.getByRole('button', { name: 'Add loan' }).click();
+  const loan = page.locator('article.loan-card').first();
+  await retype(page, loan.locator('input[id$=".principal"]'), '5000');
+  const disbursed = loan.locator('input[id$=".disbursementDate"]');
+  await typeDate(page, disbursed, '06012031');
+  await expectInvalid(disbursed);
+  await expect(loan.locator('.field-error')).toContainText(/repayment start/i);
+  await expect(keyFigure(page, 'key-gap')).toHaveText('$20,000.00');
+  await expect(gapFigure(yearCard(page, 1), /^Borrowing gap/)).toHaveText('$20,000.00');
+  await expect(page.getByRole('region', { name: 'School year summary table' })).toContainText('$20,000.00');
+
+  // A saved plan whose loan is disbursed after repayment starts still loads with gaps visible.
+  await page.waitForTimeout(600);
+  await page.evaluate(() => {
+    const envelope = JSON.parse(localStorage.getItem('debtnav.plan')!);
+    envelope.document.plan.loans[0].disbursementDate = '2031-06-01';
+    localStorage.setItem('debtnav.plan', JSON.stringify(envelope));
+  });
+  await page.reload();
+  await expect(keyFigure(page, 'key-gap')).toHaveText('$20,000.00');
+  await expect(gapFigure(yearCard(page, 1), /^Borrowing gap/)).toHaveText('$20,000.00');
+  await openLoan(page.locator('article.loan-card').first());
+  const reloadedDate = page.locator('article.loan-card').first().locator('input[id$=".disbursementDate"]');
+  const value = await reloadedDate.inputValue();
+  if (value === '2031-06-01') {
+    // Kept as saved: the loan date is highlighted and repayment is reported as not projectable.
+    await expectInvalid(reloadedDate);
+    await expect(page.locator('#results')).toContainText("Repayment can't be projected yet");
+  } else {
+    // Repaired on load: the date now fits the plan and the repair is reported in the save status.
+    expect(value <= '2030-11-20').toBe(true);
+    await expectValid(reloadedDate);
+    await expect(keyFigure(page, 'key-debt-free')).toHaveText(/^[A-Z][a-z]{2} \d{4}$|No debt-free date/);
+  }
+
+  // m7: one live save-status region; m5: federal row scope label.
+  await expect(page.locator('.save-status[role="status"]')).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Federal repayment plan comparison' })).toContainText('Your projection (federal Direct loans only)');
+
+  // m8: page behind the dialog is inert.
+  await page.getByRole('button', { name: 'Delete all my data' }).click();
+  await expect(page.locator('#root')).toHaveAttribute('aria-hidden', 'true');
+  expect(await page.locator('#root').evaluate(el => (el as HTMLElement).inert)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#root')).not.toHaveAttribute('aria-hidden', 'true');
 });
 
 // ------------------------------------------------------------------ accessibility
@@ -634,7 +707,7 @@ test('usable at 360 px without horizontal page scrolling @narrow', async ({ page
   const offenders = await page.evaluate(() => {
     const width = document.documentElement.clientWidth;
     return [...document.querySelectorAll<HTMLElement>('body *')]
-      .filter(el => !el.closest('.table-scroll, .section-nav ul, .visually-hidden, .visually-hidden-file, svg'))
+      .filter(el => !el.closest('.table-scroll, .visually-hidden, .visually-hidden-file, svg'))
       .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && (r.right > width + 1 || r.left < -1); })
       .map(el => `${el.tagName.toLowerCase()}#${el.id}.${el.className}`).slice(0, 10);
   });
@@ -650,7 +723,8 @@ test('print view hides input chrome and prints results', async ({ page }) => {
   await populate(page);
   await page.emulateMedia({ media: 'print' });
   await expect(page.locator('.inputs')).toBeHidden();
-  await expect(page.locator('.section-nav')).toBeHidden();
+  await expect(page.locator('#app-sidebar')).toBeHidden();
+  await expect(page.locator('.shell-topbar')).toBeHidden();
   await expect(page.locator('#data')).toBeHidden();
   await expect(page.getByRole('button', { name: 'Next 24 months' })).toBeHidden();
   await expect(page.locator('#results')).toBeVisible();

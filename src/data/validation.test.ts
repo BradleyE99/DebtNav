@@ -79,9 +79,12 @@ describe('validatePlannerPlan', () => {
     expect(validatePlannerPlan(plan).ok).toBe(true);
   });
 
-  it('does not block edits that are planning problems (loan disbursed after repayment starts)', () => {
+  it('rejects a loan disbursed after repayment starts at the loan field (review M1)', () => {
     const plan = planWithRecords();
     plan.loans[1].disbursementDate = '2040-01-01';
+    const result = validatePlannerPlan(plan);
+    expect(result).toMatchObject({ ok: false, errors: [{ path: 'loans.loan-b.disbursementDate', message: 'Disbursement must be on or before repayment start (2030-11-20).' }] });
+    plan.loans[1].disbursementDate = '2030-11-20';
     expect(validatePlannerPlan(plan).ok).toBe(true);
   });
 

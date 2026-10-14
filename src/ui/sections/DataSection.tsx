@@ -13,11 +13,12 @@ export function saveStatusText(status: SaveStatus): string {
   }
 }
 
-export function SaveStatusBadge() {
+/** `live` marks the single announced copy (header); other copies are visual only (m7). */
+export function SaveStatusBadge({ live = true }: { live?: boolean }) {
   const { store } = usePlanner();
   const status = store.saveStatus;
   const warn = status.state === 'unavailable' || status.state === 'error' || status.state === 'paused';
-  return <p className={warn ? 'save-status save-status--warn' : 'save-status'} role="status">{saveStatusText(status)}</p>;
+  return <p className={warn ? 'save-status save-status--warn' : 'save-status'} role={live ? 'status' : undefined}>{saveStatusText(status)}</p>;
 }
 
 export function DataSection() {
@@ -59,7 +60,7 @@ export function DataSection() {
     <section id="data" className="panel" aria-labelledby="data-heading">
       <h2 id="data-heading">Your data, on your device</h2>
       <p className="section-intro">No account and no server: your plan lives in this browser. Export a backup before clearing browser data or switching devices.</p>
-      <SaveStatusBadge />
+      <SaveStatusBadge live={false} />
       <div className="button-row">
         <button type="button" onClick={exportPlan}>Export plan (JSON)</button>
         <div className="file-picker">

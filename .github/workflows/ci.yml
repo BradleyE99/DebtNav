@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Typecheck, ESLint (incl. jsx-a11y), money lint, unit/property/component tests,
+      # recalculation benchmark (NFR-4) and production build.
+      - run: npm run check
+      # Engine/data line coverage ≥ 90% (NFR-10).
+      - run: npm run test:coverage
+      # Real-browser journey, axe (NFR-6), 360 px (NFR-8) and keystroke latency (US-701).
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e

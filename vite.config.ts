@@ -5,8 +5,8 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     coverage: {
       provider: 'v8',
-      include: ['src/engine/**/*.ts', 'src/policy/**/*.ts'],
-      exclude: ['src/policy/**/*.test.ts', 'src/engine/**/*.test.ts', 'src/engine/contracts.ts', 'src/engine/planner-contracts.ts', 'src/engine/**/*.bench.ts'],
+      include: ['src/engine/**/*.ts', 'src/policy/**/*.ts', 'src/data/**/*.ts', 'src/state/**/*.ts', 'src/integrations/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/engine/contracts.ts', 'src/engine/planner-contracts.ts', 'src/engine/**/*.bench.ts'],
       reporter: ['text', 'json-summary'],
       thresholds: { lines: 90 },
     },

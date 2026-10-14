@@ -5,6 +5,7 @@ import { formatRatePercent } from '../../data/parse';
 import { usePlanner } from '../PlannerContext';
 import { DateField, IntegerField, MoneyField, PercentField, RateField, SelectField, TextField } from '../fields/fields';
 import { formatCurrency, strategyName } from '../format';
+import { listStrategies } from '../../engine/strategies/registry';
 import { updateScenario } from '../planUpdates';
 import { newId } from '../ids';
 
@@ -104,7 +105,7 @@ function ScenarioCard({ scenario }: { scenario: Scenario }) {
 const overrideId = (scenarioId: string, path: string) => `scenarios.${scenarioId}.overrides.${path}`;
 
 function fallbackInfo(path: string): PathInfo {
-  if (path === 'repayment.strategyId') return { path, label: 'Payoff strategy', kind: 'choice', options: ['avalanche', 'snowball', 'custom'] };
+  if (path === 'repayment.strategyId') return { path, label: 'Payoff strategy', kind: 'choice', options: listStrategies().map(entry => entry.id) };
   return { path, label: path === 'postGradIncome.annualSalary' ? 'Annual salary' : 'Monthly amount for all loans', kind: 'money' };
 }
 
