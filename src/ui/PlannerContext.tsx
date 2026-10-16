@@ -7,6 +7,8 @@ import type { PlannerComparisonsDetailed, PlannerOutputs, RepaymentUnavailable }
 import { pruneDanglingReferences } from '../engine/paths';
 import { useSecondaryResults } from './derived/useSecondaryResults';
 import type { IbrEstimate, RapEstimate, TieredEstimate } from './derived/secondary';
+import { getPlanReadiness, type PlanReadiness } from '../data/readiness';
+import { DraftRegistryProvider, useDraftRegistryState } from './fields/draftRegistry';
 
 export interface PlannerApi {
   store: PlannerStore;
@@ -29,6 +31,8 @@ export interface PlannerApi {
   federal: { rap: RapEstimate | null; rapError: string | null; ibr: IbrEstimate | null; tiered: TieredEstimate | null } | null;
   /** True while comparisons/federal models are being recalculated for the latest plan. */
   comparisonsUpdating: boolean;
+  /** What can be calculated, what is missing/invalid, and which results are estimates (one shared call). */
+  readiness: PlanReadiness;
   update(edit: (plan: PlannerPlan) => PlannerPlan): Result<PlannerPlan>;
   /** Destructive edit: records an undo point, applies the edit, then prunes dangling references. */
   remove(label: string, edit: (plan: PlannerPlan) => PlannerPlan): Result<PlannerPlan>;
@@ -42,9 +46,22 @@ export function PlannerProvider({ store, children }: { store: PlannerStore; chil
   const result = useMemo(() => calculatePlannerOutputs(projectedPlan), [projectedPlan]);
   const { results: secondary, updating: secondaryUpdating } = useSecondaryResults(plan);
 
+  const { registry: drafts, invalidFieldIds } = useDraftRegistryState();
+
+  const comparisonsValue = secondary?.comparisons?.ok ? secondary.comparisons.value : null;
+  // Readiness follows the projected (deferred) plan so items and figures always describe the same plan.
+  // Invalid drafts come from the draft registry, so they are listed even after their dashboard closes.
+  const readiness = useMemo(() => getPlanReadiness(projectedPlan, {
+    outputs: result.ok ? result.value : null,
+    projectionErrors: result.ok ? result.value.repaymentUnavailable?.errors ?? [] : result.errors,
+    comparisons: comparisonsValue,
+    invalidFieldIds,
+  }), [projectedPlan, result, comparisonsValue, invalidFieldIds]);
+
   const api = useMemo<PlannerApi>(() => {
     const comparisons = secondary?.comparisons;
     return {
+      readiness,
       store,
       plan,
       projection: result.ok ? result.value : null,
@@ -60,9 +77,13 @@ export function PlannerProvider({ store, children }: { store: PlannerStore; chil
         return store.updatePlan(current => pruneDanglingReferences(edit(current)));
       },
     };
-  }, [store, plan, result, projectedPlan, secondary, secondaryUpdating]);
+  }, [store, plan, result, projectedPlan, secondary, secondaryUpdating, readiness]);
 
-  return <PlannerContext.Provider value={api}>{children}</PlannerContext.Provider>;
+  return (
+    <PlannerContext.Provider value={api}>
+      <DraftRegistryProvider value={drafts}>{children}</DraftRegistryProvider>
+    </PlannerContext.Provider>
+  );
 }
 
 export function usePlanner(): PlannerApi {

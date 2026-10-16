@@ -1,27 +1,25 @@
 import { useState, type DragEvent } from 'react';
 import { usePlanner } from '../PlannerContext';
-import { IntegerField, MoneyField, PercentField, SelectField } from '../fields/fields';
+import { IntegerField, SelectField } from '../fields/fields';
 import { Explain } from '../common/common';
 import { formatCurrency, isPositive, strategyName, strategyOptions } from '../format';
 import { effectiveCustomOrder, moveInCustomOrder } from '../planUpdates';
+import { revealField } from '../reveal';
 
 const STRATEGY_OPTIONS = strategyOptions();
 
 export function RepaymentSection() {
-  const { plan, update, projection } = usePlanner();
+  const { plan, update, projection, readiness } = usePlanner();
+  const minimumsReady = readiness.results.minimumPayments.state === 'complete' || readiness.results.minimumPayments.state === 'estimate';
   return (
     <section id="repayment" className="panel" aria-labelledby="repayment-heading">
-      <h2 id="repayment-heading">4. Life after graduation</h2>
-      <p className="section-intro">Your expected salary and how much you can put toward loans each month drive the payoff projection.</p>
+      <h2 id="repayment-heading">Repayment plan</h2>
+      <p className="section-intro">Choose how your monthly loan budget pays down debt. The budget itself is set in Income &amp; Earnings.</p>
+      <div className="computed-block">
+        <p className="computed">Monthly loan payment budget: <strong>{formatCurrency(plan.postGradIncome.monthlyDebtBudget)}</strong></p>
+        <button type="button" onClick={() => revealField('postGradIncome.monthlyDebtBudget')}>Edit income &amp; payment budget</button>
+      </div>
       <div className="field-grid">
-        <MoneyField id="postGradIncome.annualSalary" label="Expected annual salary" value={plan.postGradIncome.annualSalary}
-          onCommit={annualSalary => update(p => ({ ...p, postGradIncome: { ...p.postGradIncome, annualSalary } }))} />
-        <MoneyField id="postGradIncome.monthlyDebtBudget" label="Monthly amount for all loans" hint="Total you can pay toward debt each month."
-          value={plan.postGradIncome.monthlyDebtBudget}
-          onCommit={monthlyDebtBudget => update(p => ({ ...p, postGradIncome: { ...p.postGradIncome, monthlyDebtBudget } }))} />
-        <PercentField id="postGradIncome.raiseAllocationPercent" label="Default share of raises put toward debt" hint="Starting value for “share of the change put toward debt” when you add an income-change event or switch an event to one. Each event keeps its own share; changing this does not alter existing events."
-          max="100" value={plan.postGradIncome.raiseAllocationPercent}
-          onCommit={raiseAllocationPercent => update(p => ({ ...p, postGradIncome: { ...p.postGradIncome, raiseAllocationPercent } }))} />
         <SelectField id="repayment.strategyId" label="Payoff strategy" options={STRATEGY_OPTIONS} value={plan.repayment.strategyId}
           hint="Where money beyond the minimums goes first."
           onCommit={strategyId => update(p => ({ ...p, repayment: { ...p.repayment, strategyId } }))} />
@@ -30,7 +28,8 @@ export function RepaymentSection() {
           onCommit={maxMonths => update(p => ({ ...p, repayment: { ...p.repayment, maxMonths } }))} />
       </div>
 
-      {projection && projection.minimumTotal !== null && (
+      {!minimumsReady && <p className="empty">Minimum payments appear once you add a loan with an amount borrowed.</p>}
+      {projection && projection.minimumTotal !== null && minimumsReady && (
         <div className="computed-block">
           <p className="computed">Sum of minimum payments: <strong>{formatCurrency(projection.minimumTotal)}</strong> per month</p>
           {isPositive(projection.paymentShortfall) && (
@@ -46,7 +45,10 @@ export function RepaymentSection() {
         </div>
       )}
 
-      <CustomOrder />
+      <details open={plan.repayment.strategyId === 'custom'} className="explain">
+        <summary>Set a custom payoff order</summary>
+        <CustomOrder />
+      </details>
     </section>
   );
 }

@@ -79,15 +79,15 @@ DebtNav produces estimates for planning purposes only. It is not financial advic
 Run `npm ci` and `npm run dev`, then open the printed localhost URL (Node.js 22.12+). There is no Calculate button: every valid edit updates the results immediately and is saved in this browser.
 
 1. Edit school dates and grace; academic years are added or removed to match, and data in remaining years is kept.
-2. Add annual or semester costs and resources (grants, scholarships, hourly or fixed job income with an unavailable share, savings, family help) and a borrowing buffer. Click into any field, clear it and type. Blank or invalid text stays visible with a field-level error, and results keep the last valid value.
+2. In Costs, select a school year and open the cost or resource editor for grants, scholarships, savings, family help, and a borrowing buffer. Enter hourly or fixed job earnings separately in Income & Earnings, including the percentage available for school. Click into any field, clear it and type. Blank or invalid text stays visible with a field-level error, and results keep the last valid value.
 3. Create a loan from a year's gap or add loans manually. Loan cards show principal and annual rate while collapsed; open a card to edit its fields, or use Expand all / Collapse all. Saved loans start collapsed; new loans open for editing. Invalid drafts stay visible when reopened and flag the card; only valid edits are saved across reloads.
-4. Enter salary and monthly debt budget, choose avalanche, snowball or custom order, and reorder custom priorities by dragging or with the keyboard.
+4. In Income & Earnings, enter salary and a separate monthly loan payment budget; salary is not automatically allocated to debt. In Repayment, choose avalanche, snowball or custom order, and reorder custom priorities by dragging or with the keyboard.
 5. Add dated income changes, windfalls, aid changes and expenses. Each event shows how it moves your debt-free date. Add scenarios that override only the fields you change; everything else inherits base-plan edits.
-6. Inspect year summaries, per-loan and combined amortization schedules, strategy and scenario comparisons, the balance chart with its table alternative, the timeline, and the federal context section. Reload to confirm edits persist. Export or import a versioned JSON backup. Deleting all data requires confirmation.
+6. In Results, use Explore results to open a year summary, a chart, comparisons, a timeline, or a payment schedule with 12 months per page. Open Federal for rule context and optional earnings research. Reload to confirm edits persist. Export or import a versioned JSON backup. Deleting all data requires confirmation.
 
 The plan is saved under `debtnav.plan` (schema version 3). Projections are never stored. If storage is unavailable, the app keeps working and says changes will not be saved. Unreadable saved data is preserved, and autosave pauses until you import a backup or delete it. Older development data (schema 2) is migrated. A saved or imported plan with a loan disbursed after repayment start is repaired with a visible notice.
 
-Use the left sidebar to move between planner sections. Collapse it to an icon rail for more space; this preference is remembered on this device. On narrow screens, Menu opens a drawer that closes after navigation, on an outside click, or with Escape. Navigation moves keyboard focus to the selected section heading.
+Each sidebar link opens its own focused dashboard, with shared plan inputs and calculations preserved across views. Overview includes an Edit income shortcut. Collapse it to an icon rail for more space; this preference is remembered on this device. On narrow screens, Menu opens a drawer that closes after navigation, on an outside click, or with Escape. Navigation highlights the active dashboard and moves keyboard focus to its heading. Expanded editors and long record lists use normal page scrolling; content is not clipped to a fixed height.
 
 ## Architecture and verification
 
@@ -98,7 +98,9 @@ Shared contracts live in `src/engine/planner-contracts.ts`. Calculations are pur
 | `npm run check` | Typecheck, ESLint (incl. jsx-a11y), money lint, all unit/property/component tests, recalculation benchmark, production build |
 | `npm run test:coverage` | ≥ 90% line coverage across engine, policy, data, state and integrations |
 | `npm run test:bench` | US-701 reference plan (4 years, 8 loans, 360 months) |
-| `npm run test:e2e` | Real-Chromium journey (keyboard typing, reload, export/import, delete), axe incl. color contrast, keyboard-only, 360 px, print, keystroke latency. Run `npx playwright install chromium` once first. |
+| `npm run test:e2e` | Real-browser journeys (dashboard navigation, earnings calculations, reload, export/import, delete), axe incl. color contrast, keyboard controls, 360 px, equivalent zoom reflow, and print. Run `npx playwright install chromium` once first. |
+
+To use an installed Microsoft Edge instead of bundled Chromium on Windows, run `$env:PLAYWRIGHT_CHANNEL = 'msedge'; npm run test:e2e` in PowerShell.
 
 `.github/workflows/ci.yml` runs these on push. It has not been run on GitHub yet.
 

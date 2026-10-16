@@ -1,0 +1,36 @@
+/* Readiness: status line, "Your plan needs…" checklist, assumptions, per-figure states. */
+.readiness { display: grid; gap: 10px; margin: 0 0 16px; min-width: 0; }
+.readiness-status { margin: 0; font-weight: 700; color: var(--ink-2); }
+.readiness-needs { border: 2px solid var(--warn-line); background: var(--warn-soft); color: var(--warn-ink); border-radius: var(--radius); padding: 12px 14px; }
+.readiness-needs h3 { margin: 0 0 6px; font-size: 1.05rem; }
+.readiness-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.readiness-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.readiness-list > .readiness-item:first-child { border-top: 0; padding-top: 0; }
+.readiness-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.readiness-text p { margin: 2px 0 0; font-size: 0.92rem; }
+.readiness-actions { display: flex; flex-wrap: wrap; gap: 6px 8px; flex: 0 1 auto; max-width: 100%; }
+.readiness-action { flex: 0 0 auto; max-width: 100%; white-space: normal; }
+.readiness-checks { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 14px; background: var(--surface); }
+.readiness-checks > summary { cursor: pointer; font-weight: 700; min-height: 44px; display: flex; align-items: center; }
+.readiness-checks .readiness-list { margin-top: 6px; }
+.readiness--compact .readiness-needs { padding: 10px 12px; }
+.readiness--compact .readiness-text p { font-size: 0.88rem; }
+
+.result-figure { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; }
+.result-figure--incomplete .figure-value,
+.result-figure--invalid .figure-value,
+.result-figure--notApplicable .figure-value,
+.placeholder { color: var(--ink-3); font-style: italic; font-weight: 600; }
+.result-figure--invalid .figure-value { color: var(--danger); }
+.result-figure--nonPayoff .figure-value { color: var(--warn-ink); }
+.figure-reason { font-size: 0.85rem; color: var(--ink-2); font-weight: 400; }
+.figure-action { min-height: 32px; padding: 0; font-size: 0.9rem; font-weight: 600; }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; line-height: 1.5; }
+.chip--estimate { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
+
+.needs-card { border: 1px dashed var(--line-strong); border-radius: var(--radius); padding: 12px 14px; background: var(--surface); }
+.needs-card h3 { margin: 0 0 6px; }
+.needs-card > p { margin: 0 0 8px; }
+
+.empty-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; margin-bottom: 10px; border-radius: var(--radius); background: var(--accent-soft); }
+.empty-cta p { margin: 0; flex: 1 1 220px; min-width: 0; }

@@ -1,11 +1,13 @@
+import { useState } from 'react';
 import type { Comparison } from '../../engine/planner-contracts';
-import { revealField } from '../reveal';
+import type { ResultKey, ResultState } from '../../data/readiness';
+import { navigateDashboard } from '../nav/navigation';
+import { NeedsCard, ReadinessPanel, ResultFigure } from './Readiness';
 import { D, money, sum } from '../../engine/money';
 import { usePlanner } from '../PlannerContext';
 import { Explain, Metric, TableRegion } from '../common/common';
-import { formatCurrency, formatDate, formatMonthYear, plural, strategyName } from '../format';
+import { formatCurrency, formatDate, formatMonthYear, isPositive, plural, strategyName } from '../format';
 import { BalanceChart } from './BalanceChart';
-import { fieldIdForPath } from '../planUpdates';
 import { projectable } from './comparison';
 import { AmortizationSchedule } from './AmortizationSchedule';
 
@@ -18,104 +20,129 @@ export function differenceText(comparison: Comparison): string {
   return `${interest.isNegative() ? '−' : '+'}${formatCurrency(interest.abs().toFixed(2))} interest, ${months < 0 ? '−' : '+'}${plural(Math.abs(months), 'month')}`;
 }
 
+const VIEWS: { id: string; label: string; result: ResultKey }[] = [
+  { id: 'summary', label: 'Summary', result: 'debtFreeDate' },
+  { id: 'school', label: 'School years', result: 'borrowingGap' },
+  { id: 'loans', label: 'Loan details', result: 'loanDetails' },
+  { id: 'strategies', label: 'Strategies', result: 'strategyComparison' },
+  { id: 'scenarios', label: 'Scenarios', result: 'scenarioComparison' },
+  { id: 'chart', label: 'Balance chart', result: 'balanceChart' },
+  { id: 'timeline', label: 'Timeline', result: 'timeline' },
+  { id: 'schedule', label: 'Payment schedule', result: 'paymentSchedule' },
+];
+const readyState = (state: ResultState) => state === 'complete' || state === 'estimate';
+/** Views that still render (with their own notes) when the plan does not pay off. */
+const SHOWN_WHEN_NOT_PAID_OFF = new Set(['summary', 'strategies', 'scenarios', 'chart', 'schedule']);
+
 export function ResultsSection() {
-  const { plan, projection, projectionErrors, comparisons, comparisonsUpdating, projectionUpdating, repaymentUnavailable } = usePlanner();
-  const hasRepayment = Boolean(projection?.repayment);
+  const { projection, comparisons, comparisonsUpdating, projectionUpdating, repaymentUnavailable, readiness } = usePlanner();
+  const [view, setView] = useState('summary');
+  const current = VIEWS.find(item => item.id === view) ?? VIEWS[0];
+  const status = readiness.results[current.result];
+  const ready = status.state === 'complete' || status.state === 'estimate' || (status.state === 'nonPayoff' && SHOWN_WHEN_NOT_PAID_OFF.has(current.id));
+  // Summary always renders: it shows each figure by its own readiness state.
+  // Summary shows each figure by its own state; the school table still lists every year (empty years read
+  // "No costs entered") while a needs card above it explains what is missing.
+  const partial = current.id === 'school' && status.state === 'incomplete' && Boolean(projection);
+  const showView = current.id === 'summary' ? Boolean(projection) : ready || partial;
   return (
     <section id="results" className={projectionUpdating ? 'panel results is-recalculating' : 'panel results'} aria-labelledby="results-heading" aria-busy={projectionUpdating || undefined}>
       <h2 id="results-heading">Your live results</h2>
-      <p className="section-intro">Results update as you type. If a field shows an error, results use its last valid value.</p>
+      <p className="section-intro">Results update as you type. Anything still needed is listed first, with a button that takes you to the right field.</p>
+      <ReadinessPanel />
       {!projection && (
-        <div className="notice notice--warning" role="alert">
-          <p><strong>Results can't be calculated yet.</strong></p>
-          <ul>{projectionErrors.map(error => <ProjectionErrorItem key={`${error.path}-${error.message}`} path={error.path} message={error.message} />)}</ul>
+        <div className="notice notice--warning">
+          <span className="notice-icon" aria-hidden="true">!</span>
+          <p><strong>Results can't be calculated yet.</strong> Fix the values listed above.</p>
         </div>
       )}
       {projection && repaymentUnavailable && (
-        <div className="notice notice--warning" role="alert">
+        <div className="notice notice--warning">
           <span className="notice-icon" aria-hidden="true">!</span>
-          <div className="notice-body">
-            <p><strong>Repayment can't be projected yet.</strong> Borrowing gaps and the school-year summary below are still up to date.</p>
-            <ul>{projectionErrors.map(error => <ProjectionErrorItem key={`${error.path}-${error.message}`} path={error.path} message={error.message} />)}</ul>
-          </div>
+          <p><strong>Repayment can't be projected yet.</strong> Borrowing gaps and the school-year summary are still up to date. Fix the values listed above to see repayment results.</p>
         </div>
       )}
-      {projection && (
-        <>
-          {hasRepayment && <Summary />}
-          <YearSummaryTable />
-          {hasRepayment && (
-            <>
-              <LoanTable />
-              <div className={comparisonsUpdating ? 'is-updating' : undefined} aria-busy={comparisonsUpdating}>
-                {comparisonsUpdating && <p className="updating" aria-hidden="true">Updating comparisons…</p>}
-                <StrategyComparison />
-                {plan.scenarios.length > 0 && <ScenarioComparison />}
-                {comparisons && <BalanceChart />}
-              </div>
-            </>
+      <div className="dashboard-toolbar">
+        <div className="field field--narrow">
+          <label htmlFor="results-view">Explore results</label>
+          <select id="results-view" value={current.id} onChange={event => setView(event.target.value)}>
+            {VIEWS.map(item => <option key={item.id} value={item.id}>{item.label}{item.id === 'summary' ? '' : viewSuffix(readiness.results[item.result].state)}</option>)}
+          </select>
+        </div>
+        <span className="field-hint">Choose a focused view for detailed tables, comparisons, or your payment schedule.</span>
+      </div>
+      {(!showView || partial) && (
+        <NeedsCard result={current.result} title={current.label}>
+          {current.id === 'scenarios' && status.state === 'notApplicable' && (
+            <button type="button" onClick={() => navigateDashboard('scenarios')}>Create a scenario</button>
           )}
-          <Timeline />
-          {hasRepayment && <AmortizationSchedule />}
+        </NeedsCard>
+      )}
+      {showView && (
+        <>
+          {current.id === 'summary' && <Summary />}
+          {current.id === 'school' && <YearSummaryTable />}
+          {current.id === 'loans' && <LoanTable />}
+          {(current.id === 'strategies' || current.id === 'scenarios' || current.id === 'chart') && (
+            <div className={comparisonsUpdating ? 'is-updating' : undefined} aria-busy={comparisonsUpdating}>
+              {comparisonsUpdating && <p className="updating" aria-hidden="true">Updating comparisons…</p>}
+              {current.id === 'strategies' && <StrategyComparison />}
+              {current.id === 'scenarios' && <ScenarioComparison />}
+              {current.id === 'chart' && comparisons && <BalanceChart />}
+            </div>
+          )}
+          {current.id === 'timeline' && <Timeline />}
+          {current.id === 'schedule' && <AmortizationSchedule />}
         </>
       )}
     </section>
   );
 }
 
-/** One projection error, named after the record it belongs to and linked to its field. */
-function ProjectionErrorItem({ path, message }: { path: string; message: string }) {
-  const { plan } = usePlanner();
-  const fieldId = fieldIdForPath(plan, path);
-  const loan = plan.loans.find(item => fieldId.startsWith(`loans.${item.id}.`));
-  // Link to record fields (loans, years, events, settings); the element is looked up when clicked.
-  const linkable = /^(loans|schoolYears|lifeEvents|settings|postGradIncome|repayment)\./.test(fieldId);
-  return (
-    <li>
-      {loan && !message.includes(loan.name) ? <><strong>{loan.name}:</strong> </> : null}{message}{' '}
-      {linkable && (
-        <a href={`#${fieldId}`} onClick={event => {
-          // Expands a collapsed loan card if needed, then focuses the field.
-          if (revealField(fieldId)) event.preventDefault();
-        }}>
-          Go to the field
-        </a>
-      )}
-    </li>
-  );
+function viewSuffix(state: ResultState): string {
+  if (state === 'incomplete') return ' (needs information)';
+  if (state === 'invalid') return ' (needs a fix)';
+  if (state === 'notApplicable') return ' (not used yet)';
+  return '';
 }
 
 function Summary() {
-  const { plan, projection } = usePlanner();
-  const repayment = projection?.repayment;
-  if (!projection || !repayment) return null;
+  const { plan, projection, readiness } = usePlanner();
+  if (!projection) return null;
+  const repayment = projection.repayment;
+  const hasDebt = readiness.results.totalBorrowed.state === 'complete';
   // Only a projection that stops (status notAmortizing) has no debt-free date; temporary negative
   // amortization (e.g. until a raise) is shown as the engine's own warning next to the date.
-  const negative = repayment.status === 'notAmortizing';
+  const negative = repayment?.status === 'notAmortizing';
   const isAmortizationWarning = (code: string) => code === 'NEGATIVE_AMORTIZATION' || code === 'NON_AMORTIZING';
   const totalBorrowed = money(sum(plan.loans.map(loan => loan.principal)));
-  const debtFree = repayment.debtFreeDate
-    ? formatMonthYear(repayment.debtFreeDate)
-    : negative ? 'No debt-free date' : 'Not within the horizon';
+  const debtFree = repayment?.debtFreeDate ? formatMonthYear(repayment.debtFreeDate) : 'No debt-free date';
   return (
     <div className="summary">
       <h3>Summary</h3>
       <dl className="metrics">
-        <Metric label="Debt-free date" value={debtFree} detail={repayment.debtFreeDate ? `${plural(repayment.amortizationSchedule.length, 'payment')} from ${formatMonthYear(repayment.firstPaymentDate)}` : undefined} />
-        <Metric label="Total interest" value={repayment.totalInterestPaid === null ? 'Not available' : formatCurrency(repayment.totalInterestPaid)}
-          detail={repayment.totalInterestPaid === null ? 'Shown only when the plan reaches payoff.' : 'In-school and repayment interest'} />
-        <Metric label="Total borrowed" value={formatCurrency(totalBorrowed)} />
-        <Metric label="Balance when repayment starts" value={formatCurrency(repayment.balanceAtRepaymentStart)} detail={formatDate(repayment.repaymentStartDate)} />
+        <Metric label="Debt-free date" value={<ResultFigure result="debtFreeDate" value={debtFree} nonPayoffValue="No debt-free date" />}
+          detail={repayment?.debtFreeDate && readyState(readiness.results.debtFreeDate.state) ? `${plural(repayment.amortizationSchedule.length, 'payment')} from ${formatMonthYear(repayment.firstPaymentDate)}` : undefined} />
+        <Metric label="Total interest" value={<ResultFigure result="totalInterest" value={formatCurrency(repayment?.totalInterestPaid)} />}
+          detail={readyState(readiness.results.totalInterest.state) ? 'In-school and repayment interest' : undefined} />
+        <Metric label="Total borrowing gap" value={<ResultFigure result="borrowingGap" value={formatCurrency(money(sum(projection.years.map(year => year.gap))))} />}
+          detail={readyState(readiness.results.borrowingGap.state) ? 'Costs not covered by your resources, all school years' : undefined} />
+        <Metric label="Total borrowed" value={<ResultFigure result="totalBorrowed" value={formatCurrency(totalBorrowed)} />} />
+        <Metric label="Balance when repayment starts" value={<ResultFigure result="loanDetails" value={formatCurrency(repayment?.balanceAtRepaymentStart)} action={false} />}
+          detail={repayment && readyState(readiness.results.loanDetails.state) ? formatDate(repayment.repaymentStartDate) : undefined} />
       </dl>
-      {negative && (
+      {hasDebt && negative && (
         <div className="notice notice--warning" role="alert">
           <span className="notice-icon" aria-hidden="true">!</span>
           <p><strong>Your payments don't cover the interest.</strong> At least one balance grows instead of shrinking, so there is no debt-free date. Increase your monthly amount or change the loan terms.</p>
         </div>
       )}
-      {repayment.warnings.filter(warning => !(negative && isAmortizationWarning(warning.code))).map(warning => (
+      {hasDebt && repayment?.warnings.filter(warning => !(negative && isAmortizationWarning(warning.code))).map(warning => (
         <p key={`${warning.code}-${warning.loanId ?? ''}`} className="notice notice--warning">{warning.message}</p>
       ))}
+      {hasDebt && isPositive(projection.paymentShortfall) && (
+        <p className="notice notice--warning">Your monthly budget is {formatCurrency(projection.paymentShortfall)} short of the minimum payments ({formatCurrency(projection.minimumTotal)}/mo). The projection assumes you pay only your budget.</p>
+      )}
       {projection.notices.map(notice => <p key={notice} className="field-hint">{notice}</p>)}
       <Explain>
         <p>Debt-free date = date of the final payment that brings every balance to $0.00. It is not shown if payments never cover interest (negative amortization) or payoff is beyond your projection horizon.</p>
@@ -128,7 +155,8 @@ function Summary() {
 }
 
 function YearSummaryTable() {
-  const { projection } = usePlanner();
+  const { projection, readiness } = usePlanner();
+  const noCosts = (yearId: string) => readiness.items.some(item => item.id === `costs.year.${yearId}.empty`);
   if (!projection) return null;
   return (
     <>
@@ -143,7 +171,7 @@ function YearSummaryTable() {
             {projection.years.map((year, index) => (
               <tr key={year.yearId}>
                 <th scope="row">Year {index + 1}</th>
-                <td>{formatCurrency(year.costs)}</td><td>{formatCurrency(year.resources)}</td><td>{formatCurrency(year.gap)}</td>
+                <td>{noCosts(year.yearId) ? <span className="placeholder">No costs entered</span> : formatCurrency(year.costs)}</td><td>{formatCurrency(year.resources)}</td><td>{noCosts(year.yearId) ? <span className="placeholder">—</span> : formatCurrency(year.gap)}</td>
                 <td>{formatCurrency(year.surplus)}</td><td>{formatCurrency(year.bufferedGap)}</td><td>{formatCurrency(year.borrowed)}</td>
               </tr>
             ))}

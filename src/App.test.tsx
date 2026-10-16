@@ -5,14 +5,15 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import { STORAGE_KEY, importDocument } from './data/storage';
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => { localStorage.clear(); window.history.replaceState(null, '', '/'); window.scrollTo = () => {}; });
 afterEach(() => cleanup());
 
 it('renders an editable planner (no read-only preview) and saves edits to browser storage', async () => {
   const user = userEvent.setup();
   const view = render(<App />);
   expect(screen.getByRole('heading', { level: 1, name: 'DebtNav' })).toBeTruthy();
-  const budget = screen.getByLabelText('Monthly amount for all loans') as HTMLInputElement;
+  await user.click(screen.getByRole('link', { name: 'Income & Earnings' }));
+  const budget = screen.getByLabelText('Monthly amount available for loan payments') as HTMLInputElement;
   await user.clear(budget);
   await user.type(budget, '450');
   await new Promise(resolve => setTimeout(resolve, 400));
@@ -20,5 +21,5 @@ it('renders an editable planner (no read-only preview) and saves edits to browse
   expect(saved.ok && saved.value.plan.postGradIncome.monthlyDebtBudget).toBe('450.00');
   view.unmount();
   render(<App />);
-  expect((screen.getByLabelText('Monthly amount for all loans') as HTMLInputElement).value).toBe('450.00');
+  expect((screen.getByLabelText('Monthly amount available for loan payments') as HTMLInputElement).value).toBe('450.00');
 });

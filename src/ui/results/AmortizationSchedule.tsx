@@ -3,7 +3,7 @@ import { usePlanner } from '../PlannerContext';
 import { Explain, TableRegion } from '../common/common';
 import { formatCurrency, formatMonthYear } from '../format';
 
-const PAGE_SIZE = 24;
+const PAGE_SIZE = 12;
 
 /** Month-by-month schedule, combined or per loan, with paging (US-504). */
 export function AmortizationSchedule() {
@@ -59,9 +59,9 @@ export function AmortizationSchedule() {
             </table>
           </TableRegion>
           <nav className="pager" aria-label="Amortization schedule pages">
-            <button type="button" onClick={() => setPage(page - 1)} disabled={page === 0}>Previous 24 months</button>
+            <button type="button" onClick={() => setPage(page - 1)} disabled={page === 0}>Previous 12 months</button>
             <span>Page {page + 1} of {pages}</span>
-            <button type="button" onClick={() => setPage(page + 1)} disabled={page >= pages - 1}>Next 24 months</button>
+            <button type="button" onClick={() => setPage(page + 1)} disabled={page >= pages - 1}>Next 12 months</button>
           </nav>
         </>
       )}

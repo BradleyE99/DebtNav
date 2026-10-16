@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { PlannerLoan } from '../../engine/planner-contracts';
 import type { InSchoolInterestPayment, LoanType } from '../../engine/contracts';
@@ -15,6 +15,7 @@ import { LOAN_TYPE_LABELS, formatCurrency, plural } from '../format';
 import { errorsForLoan, fieldIdForPath, updateLoan } from '../planUpdates';
 import { onRevealRequest } from '../reveal';
 import { newId } from '../ids';
+import { groupLoansByYear, loanYearKey, useLoanGroupingPreference } from './loanYearGroups';
 import './loans.css';
 
 const loanTypeOptions = Object.entries(LOAN_TYPE_LABELS) as [LoanType, string][];
@@ -51,6 +52,16 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
   // A loan added here that should receive focus once it has opened.
   const pendingFocusRef = useRef<string | null>(null);
 
+  // Optional grouping by disbursement year (presentation only; remembered on this device).
+  const [groupByYear, setGroupByYear] = useLoanGroupingPreference();
+  // Year sections the user collapsed. UI-only state; year sections start open.
+  const [collapsedYears, setCollapsedYears] = useState<ReadonlySet<string>>(() => new Set());
+  // Each loan's year as of the last render, to spot loans that are new or moved to another year.
+  const yearSignature = plan.loans.map(loan => `${loan.id}:${loanYearKey(loan)}`).join('|');
+  const [seenYears, setSeenYears] = useState(yearSignature);
+  const loansRef = useRef(plan.loans);
+  useEffect(() => { loansRef.current = plan.loans; });
+
   // Drop ids of loans that no longer exist (adjusting state during render, without an extra effect pass).
   const loanIds = new Set(plan.loans.map(loan => loan.id));
   if ([...expanded].some(id => !loanIds.has(id))) {
@@ -61,6 +72,30 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
   if (focusLoanId && loanIds.has(focusLoanId) && !expanded.has(focusLoanId)) {
     setExpanded(withOpen(expanded, focusLoanId, true));
   }
+
+  // A new loan, or an open loan whose new date moved it, opens its year section so it stays in view.
+  if (yearSignature !== seenYears) {
+    const before = new Map(seenYears ? seenYears.split('|').map(entry => entry.split(':') as [string, string]) : []);
+    const reveal = plan.loans
+      .filter(loan => before.get(loan.id) !== loanYearKey(loan) && (!before.has(loan.id) || expanded.has(loan.id)))
+      .map(loanYearKey);
+    setSeenYears(yearSignature);
+    if (reveal.some(key => collapsedYears.has(key))) setCollapsedYears(new Set([...collapsedYears].filter(key => !reveal.includes(key))));
+  }
+  if (focusLoanId && loanIds.has(focusLoanId)) {
+    const key = loanYearKey(plan.loans.find(loan => loan.id === focusLoanId)!);
+    if (collapsedYears.has(key)) setCollapsedYears(withOpen(collapsedYears, key, false));
+  }
+
+  // A loan whose new date moves it to another year section is remounted there; keep focus on the field being edited.
+  const sectionRef = useRef<HTMLElement>(null);
+  const lastFocusedRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const id = lastFocusedRef.current;
+    if (!id || (document.activeElement && document.activeElement !== document.body)) return;
+    const element = document.getElementById(id);
+    if (element && sectionRef.current?.contains(element)) element.focus({ preventScroll: true });
+  }, [yearSignature]);
   useEffect(() => {
     const target = pendingFocusRef.current ?? focusLoanId;
     if (!target || !expanded.has(target)) return;
@@ -75,7 +110,12 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
   // "Go to the field" links elsewhere ask collapsed containers to reveal a field.
   useEffect(() => onRevealRequest(fieldId => {
     const loanId = loanIdFromFieldId(fieldId);
-    if (loanId) flushSync(() => setExpanded(current => withOpen(current, loanId, true)));
+    if (!loanId) return;
+    const loan = loansRef.current.find(item => item.id === loanId);
+    flushSync(() => {
+      setExpanded(current => withOpen(current, loanId, true));
+      if (loan) setCollapsedYears(current => withOpen(current, loanYearKey(loan), false));
+    });
   }), []);
 
   function addLoan() {
@@ -92,36 +132,76 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
     setExpanded(current => withOpen(current, id, true));
   }
 
-  const allExpanded = plan.loans.length > 0 && plan.loans.every(loan => expanded.has(loan.id));
+  const groups = groupByYear ? groupLoansByYear(plan.loans) : [];
+  const allExpanded = plan.loans.length > 0 && plan.loans.every(loan => expanded.has(loan.id)) && groups.every(group => !collapsedYears.has(group.key));
   const noneExpanded = plan.loans.every(loan => !expanded.has(loan.id));
+  const card = (loan: PlannerLoan, index: number) => (
+    <LoanCard key={loan.id} loan={loan} index={index} nested={groupByYear} open={expanded.has(loan.id)}
+      onToggle={() => setExpanded(current => withOpen(current, loan.id, !current.has(loan.id)))} />
+  );
 
   return (
-    <section id="loans" className="panel" aria-labelledby="loans-heading">
-      <h2 id="loans-heading" tabIndex={-1}>3. Your loans</h2>
+    <section id="loans" ref={sectionRef} className="panel" aria-labelledby="loans-heading"
+      onFocus={event => { lastFocusedRef.current = event.target.id || null; }}>
+      <h2 id="loans-heading" tabIndex={-1}>Your loans</h2>
       <p className="section-intro">Add each loan, or create one from a school year's gap. Loans never change automatically when your gap changes.</p>
       <p className="computed" role="status">Total borrowed: <strong>{formatCurrency(totalDebt)}</strong> across {plan.loans.length} loan{plan.loans.length === 1 ? '' : 's'}</p>
       {inSchoolMonthly && (
         <p className="computed">In-school interest you pay: about <strong>{formatCurrency(inSchoolMonthly)} per month</strong> while in school and grace.</p>
       )}
-      {plan.loans.length === 0 && <p className="empty">No loans yet.</p>}
+      {plan.loans.length === 0 && <p className="empty">No loans yet. Add each loan you have or plan to take, or create one from a school year's gap under Costs. Your debt-free date and total interest need at least one loan.</p>}
       {plan.loans.length > 0 && (
-        <div className="loan-list-controls" role="group" aria-label="Show or hide loan details">
-          <button type="button" className="loan-list-control" aria-disabled={allExpanded || undefined}
-            onClick={() => { if (!allExpanded) setExpanded(new Set(plan.loans.map(loan => loan.id))); }}>
-            Expand all
-          </button>
-          <button type="button" className="loan-list-control" aria-disabled={noneExpanded || undefined}
-            onClick={() => { if (!noneExpanded) setExpanded(new Set()); }}>
-            Collapse all
-          </button>
+        <div className="loan-list-toolbar">
+          <div className="field-check loan-list-grouping">
+            <input id="loans-group-by-year" type="checkbox" checked={groupByYear} onChange={event => setGroupByYear(event.target.checked)} />
+            <label htmlFor="loans-group-by-year">Group by year</label>
+          </div>
+          <div className="loan-list-controls" role="group" aria-label="Show or hide loan details">
+            <button type="button" className="loan-list-control" aria-disabled={allExpanded || undefined}
+              onClick={() => {
+                if (allExpanded) return;
+                setExpanded(new Set(plan.loans.map(loan => loan.id)));
+                setCollapsedYears(new Set());
+              }}>
+              Expand all
+            </button>
+            <button type="button" className="loan-list-control" aria-disabled={noneExpanded || undefined}
+              onClick={() => { if (!noneExpanded) setExpanded(new Set()); }}>
+              Collapse all
+            </button>
+          </div>
         </div>
       )}
-      <div className="loan-list">
-        {plan.loans.map((loan, index) => (
-          <LoanCard key={loan.id} loan={loan} index={index} open={expanded.has(loan.id)} onToggle={() => setExpanded(current => withOpen(current, loan.id, !current.has(loan.id)))} />
-        ))}
-      </div>
-      <button type="button" className="button-primary" onClick={addLoan} disabled={plan.loans.length >= 50}>Add loan</button>
+      {groupByYear ? (
+        <div className="loan-years">
+          {groups.map(group => {
+            const open = !collapsedYears.has(group.key);
+            const groupId = `loans-year-${group.key}`;
+            return (
+              <section key={group.key} id={groupId} className="loan-year" aria-labelledby={`${groupId}-title`}>
+                <h3 className="loan-year__heading">
+                  <button type="button" className="loan-year__toggle" aria-expanded={open} aria-controls={`${groupId}-loans`}
+                    onClick={() => setCollapsedYears(current => withOpen(current, group.key, open))}>
+                    <span id={`${groupId}-title`} className="loan-year__title">{group.label}</span>
+                    <span className="loan-year__summary">
+                      {plural(group.loans.length, 'loan')} · <span className="loan-year__total">{formatCurrency(group.totalPrincipal)}</span> principal
+                    </span>
+                    <span className="loan-card__chevron" aria-hidden="true" />
+                  </button>
+                </h3>
+                <div id={`${groupId}-loans`} className="loan-list loan-year__loans" hidden={!open}>
+                  {group.loans.map(({ loan, index }) => card(loan, index))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="loan-list">
+          {plan.loans.map((loan, index) => card(loan, index))}
+        </div>
+      )}
+      <button type="button" id="loans-add" className="button-primary" onClick={addLoan} disabled={plan.loans.length >= 50}>Add loan</button>
       {plan.loans.length >= 50 && <p className="field-hint">You have reached the 50-loan limit.</p>}
       <Explain>
         <p>Unsubsidized and private loans accrue simple interest in school and grace: principal × annual rate × days ÷ 365. Subsidized loans accrue nothing during school and grace.</p>
@@ -133,7 +213,7 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
   );
 }
 
-function LoanCard({ loan, index, open, onToggle }: { loan: PlannerLoan; index: number; open: boolean; onToggle(): void }) {
+function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; index: number; nested: boolean; open: boolean; onToggle(): void }) {
   const { plan, update, remove, projection, projectionErrors } = usePlanner();
   const { invalidFieldIds, FieldStatusProvider } = useFieldStatus();
   const base = `loans.${loan.id}`;
@@ -149,6 +229,8 @@ function LoanCard({ loan, index, open, onToggle }: { loan: PlannerLoan; index: n
   const atRepayment = projection?.repayment?.loans.find(item => item.loanId === loan.id);
   const accrues = loan.type === 'unsubsidized' || ((loan.type === 'private' || loan.type === 'other') && loan.accruesInterestInSchool !== false);
   const inSchool = inSchoolCost(loan, projection?.repayment?.inSchoolInterestPayments ?? null);
+  // Inside a year section the card heading sits one level below the year's heading.
+  const Heading = nested ? 'h4' : 'h3';
 
   // Fields needing attention: fields showing an error (including invalid drafts that were never saved)
   // plus engine problems tied to a field. Engine problems without a field still flag the loan.
@@ -160,7 +242,7 @@ function LoanCard({ loan, index, open, onToggle }: { loan: PlannerLoan; index: n
 
   return (
     <article className={`loan-card${open ? ' loan-card--open' : ''}${attention ? ' loan-card--attention' : ''}`} aria-labelledby={nameId}>
-      <h3 id={headingId} className="loan-card__heading">
+      <Heading id={headingId} className="loan-card__heading">
         <button type="button" className="loan-card__toggle" aria-expanded={open} aria-controls={detailsId}
           aria-describedby={attention ? attentionId : undefined} onClick={onToggle}>
           <span className="loan-card__title">
@@ -176,7 +258,7 @@ function LoanCard({ loan, index, open, onToggle }: { loan: PlannerLoan; index: n
           </span>
           <span className="loan-card__chevron" aria-hidden="true" />
         </button>
-      </h3>
+      </Heading>
       {attention && (
         <p id={attentionId} className="loan-card__attention">
           <span className="loan-card__attention-icon" aria-hidden="true">!</span>
@@ -205,7 +287,7 @@ function LoanCard({ loan, index, open, onToggle }: { loan: PlannerLoan; index: n
             <DateField id={`${base}.disbursementDate`} label="Disbursement date" value={loan.disbursementDate}
               externalError={loanErrors.find(error => fieldIdForPath(plan, error.path) === `${base}.disbursementDate`)?.message} onCommit={disbursementDate => patch({ disbursementDate })} />
             <IntegerField id={`${base}.termMonths`} label="Repayment term (months)" hint="120 months = 10 years." min={1} max={1200} value={loan.termMonths} onCommit={termMonths => patch({ termMonths })} />
-            <OptionalMoneyField id={`${base}.monthlyPayment`} label="Fixed monthly payment (optional)" hint="Leave blank to use the calculated minimum."
+            <OptionalMoneyField id={`${base}.monthlyPayment`} label="Fixed monthly payment (optional)" hint="Leave blank to use the calculated minimum. A fixed payment replaces this loan's minimum as its share of your monthly budget; if the budget is less than all shares, each is reduced proportionally."
               value={loan.monthlyPayment} onCommit={monthlyPayment => patch({ monthlyPayment })} />
           </div>
           <div className="check-group">
@@ -219,7 +301,7 @@ function LoanCard({ loan, index, open, onToggle }: { loan: PlannerLoan; index: n
                 value={Boolean(loan.payInterestWhileInSchool)} onCommit={payInterestWhileInSchool => patch({ payInterestWhileInSchool })} />
             )}
             <CheckboxField id={`${base}.capitalizeInterest`} label="Add unpaid interest to the balance at repayment (capitalization)"
-              hint="Modeling assumption. Turn off to keep accrued interest separate from principal."
+              hint="Modeling assumption. Federal Direct Loans no longer capitalize unpaid interest when repayment starts; leave this on for private loans that do."
               value={loan.capitalizeInterest !== false} onCommit={capitalizeInterest => patch({ capitalizeInterest })} />
             {(loan.type === 'private' || loan.type === 'other') && (
               <CheckboxField id={`${base}.accruesInterestInSchool`} label="Interest accrues while in school"

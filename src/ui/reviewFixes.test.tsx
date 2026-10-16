@@ -7,11 +7,11 @@ import type { PlannerPlan } from '../engine/planner-contracts';
 import { listStrategies } from '../engine/strategies/registry';
 import { calculatePlannerProjection } from '../engine/planner';
 import { comparisonError, projectable } from './results/comparison';
-import { renderPlanner, samplePlan } from './testing/renderPlanner';
+import { navigateTo, renderPlanner, samplePlan } from './testing/renderPlanner';
 import type { PlannerStore } from '../engine/planner-contracts';
 import PlannerApp from './PlannerApp';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); });
 
 const byId = (id: string) => {
   const element = document.getElementById(id);
@@ -23,9 +23,11 @@ describe('review fixes', () => {
   it('M2: the default share of raises seeds new and switched income-change events', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('income', true);
     const share = screen.getByLabelText('Default share of raises put toward debt');
     await user.clear(share);
     await user.type(share, '30');
+    navigateTo('events');
     await user.click(screen.getByRole('button', { name: 'Add income change' }));
     const income = view.plan().lifeEvents[0];
     expect(income).toMatchObject({ type: 'income', allocationPercent: '30', amount: view.plan().postGradIncome.annualSalary });
@@ -48,7 +50,10 @@ describe('review fixes', () => {
       lifeEvents: [{ id: 'raise', name: 'Raise', type: 'income', date: '2032-01-01', amount: '85000.00', allocationPercent: '50' }],
     };
     renderPlanner({ plan });
+    navigateTo('results', true);
+    navigateTo('overview');
     const debtFree = screen.getByTestId('key-debt-free').textContent ?? '';
+    navigateTo('results');
     const summary = document.querySelector('.summary') as HTMLElement;
     if (/^[A-Z][a-z]{2} \d{4}$/.test(debtFree)) {
       expect(summary.textContent).not.toMatch(/there is no debt-free date/);
@@ -61,6 +66,7 @@ describe('review fixes', () => {
   it('M1: a disbursement date after repayment starts is rejected at the field and results stay visible', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans', true);
     const field = byId('loans.loan-b.disbursementDate');
     const original = view.plan().loans[1].disbursementDate;
     await user.clear(field);
@@ -68,6 +74,7 @@ describe('review fixes', () => {
     expect(field.getAttribute('aria-invalid')).toBe('true');
     expect(document.getElementById('loans.loan-b.disbursementDate-error')?.textContent).toMatch(/repayment start/i);
     expect(view.plan().loans[1].disbursementDate).toBe(original);
+    navigateTo('overview');
     expect(screen.getByTestId('key-gap').textContent).toBe('$6,000.00');
   });
 
@@ -86,6 +93,7 @@ describe('review fixes', () => {
 
   it('m2: strategy options and names come from the engine registry', () => {
     renderPlanner({ plan: samplePlan() });
+    navigateTo('repayment', true);
     const options = [...(byId('repayment.strategyId') as unknown as HTMLSelectElement).options].map(option => [option.value, option.text]);
     expect(options).toEqual(listStrategies().map(entry => [entry.id, entry.name]));
   });
@@ -93,6 +101,7 @@ describe('review fixes', () => {
   it('m3: new loans default to the current undergraduate Direct Loan rate', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans', true);
     await user.click(screen.getByRole('button', { name: 'Add loan' }));
     expect(view.plan().loans[2].annualRate).toBe('0.0652');
   });
@@ -101,6 +110,7 @@ describe('review fixes', () => {
     const base = samplePlan();
     const yearId = base.schoolYears[0].id;
     renderPlanner({ plan: { ...base, lifeEvents: [{ id: 'laptop', name: 'Laptop', type: 'expense', date: base.schoolYears[0].startDate, amount: '1500.00', allocationPercent: '100', schoolYearId: yearId }] } });
+    navigateTo('school', true);
     const totals = document.querySelector('[aria-label="Year 1 cost totals"]')?.textContent ?? '';
     expect(totals).toContain('Cost items$10,000.00');
     expect(totals).toContain('School expense events+$1,500.00');
@@ -110,6 +120,7 @@ describe('review fixes', () => {
   it('m5: the federal comparison labels the projection row as federal loans only', () => {
     const base = samplePlan();
     renderPlanner({ plan: { ...base, loans: base.loans.map(loan => ({ ...loan, disbursementDate: '2026-06-01' })) } });
+    navigateTo('federal', true);
     const table = screen.getByRole('region', { name: 'Federal repayment plan comparison' });
     expect(within(table).getByText('Your projection (federal Direct loans only)')).toBeTruthy();
     expect(within(table).queryByText(/all loans/)).toBeNull();
@@ -124,6 +135,7 @@ describe('review fixes', () => {
   it('m8: the page behind the delete dialog is inert and hidden from assistive technology', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('data', true);
     await user.click(screen.getByRole('button', { name: 'Delete all my data' }));
     const dialog = screen.getByRole('alertdialog');
     expect(view.container.getAttribute('aria-hidden')).toBe('true');
@@ -150,13 +162,18 @@ describe('review fixes', () => {
       markUndoable: () => {}, importText: () => ({ ok: false, errors: [] }), exportJson: () => ({ ok: true, value: '' }),
       deleteAllData: () => ({ ok: true, notice: null }),
     };
+    window.scrollTo = () => {};
     render(<PlannerApp store={store} />);
     expect(screen.getByTestId('key-gap').textContent).toBe('$6,000.00');
     expect(screen.getByTestId('key-debt-free').textContent).toBe("Can't be projected");
+    navigateTo('school', true);
     const yearId = plan.schoolYears[0].id;
     const yearCard = byId(`year-${yearId}-heading`).closest('article') as HTMLElement;
     expect(yearCard.textContent).toContain('$6,000.00');
+    navigateTo('results');
+    fireEvent.change(screen.getByLabelText('Explore results'), { target: { value: 'school' } });
     expect(screen.getByRole('region', { name: 'School year summary table' })).toBeTruthy();
+    navigateTo('loans');
     const field = byId('loans.loan-b.disbursementDate');
     expect(field.getAttribute('aria-invalid')).toBe('true');
     expect(document.getElementById('loans.loan-b.disbursementDate-error')?.textContent).toMatch(/results can't be projected/);
@@ -165,9 +182,12 @@ describe('review fixes', () => {
     expect(byId('loans.loan-b-attention').textContent).toMatch(/Needs attention: 1 field \(repayment can.t be projected\)/);
     fireEvent.click(within(byId('loans.loan-b-heading')).getByRole('button'));
     expect(within(card).getByRole('alert').textContent).toMatch(/because of this loan/);
+    navigateTo('results');
     const results = byId('results-heading').closest('section') as HTMLElement;
     expect(results.textContent).toMatch(/Repayment can't be projected yet/);
-    expect(within(results).getByRole('link', { name: 'Go to the field' }).getAttribute('href')).toBe('#loans.loan-b.disbursementDate');
+    // The engine error is listed in the "Your plan needs…" checklist with a button that opens the field.
+    const item = results.querySelector('[data-readiness-id="engine.loans.loan-b.disbursementDate"]') as HTMLElement;
+    expect(within(item).getByRole('button', { name: 'Fix this value' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Amortization schedule table' })).toBeNull();
   });
 
@@ -175,6 +195,7 @@ describe('review fixes', () => {
     const user = userEvent.setup();
     const base = samplePlan();
     const view = renderPlanner({ plan: { ...base, loans: base.loans.map(loan => ({ ...loan, disbursementDate: '2029-08-24' })) } });
+    navigateTo('setup');
     const field = byId('settings.graduationDate');
     await user.clear(field);
     await user.type(field, '2028-05-20');

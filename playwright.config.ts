@@ -10,7 +10,7 @@ export default defineConfig({
   timeout: 60_000,
   fullyParallel: false,
   reporter: [['list']],
-  use: { baseURL: `http://localhost:${port}`, trace: 'retain-on-failure' },
+  use: { ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}), baseURL: `http://localhost:${port}`, trace: 'retain-on-failure' },
   outputDir: port === 5181 ? 'test-results' : `test-results-${port}`,
   webServer: {
     command: `npx vite build --outDir ${outDir} && npx vite preview --outDir ${outDir} --port ${port} --strictPort`,

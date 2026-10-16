@@ -1,21 +1,41 @@
 // @vitest-environment jsdom
+import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AppShell, DRAWER_QUERY } from './AppShell';
 import { NAV_ITEMS } from './navItems';
 import { SIDEBAR_PREFERENCE_KEY, readSidebarPreference } from './useSidebarPreference';
-import { pickActiveSection } from './useActiveSection';
+import { navigateDashboard } from './navigation';
 
 function Shell() {
+  const readDashboard = () => {
+    try {
+      const id = decodeURIComponent(window.location.hash.slice(1));
+      return NAV_ITEMS.some(item => item.id === id) ? id : 'overview';
+    } catch { return 'overview'; }
+  };
+  const [active, setActive] = useState(readDashboard);
+  useEffect(() => {
+    const sync = () => setActive(readDashboard());
+    window.addEventListener('debt-nav:navigate', sync);
+    window.addEventListener('hashchange', sync);
+    window.addEventListener('popstate', sync);
+    return () => {
+      window.removeEventListener('debt-nav:navigate', sync);
+      window.removeEventListener('hashchange', sync);
+      window.removeEventListener('popstate', sync);
+    };
+  }, []);
+  useEffect(() => { document.getElementById(active + '-heading')?.focus(); }, [active]);
+  const item = NAV_ITEMS.find(item => item.id === active)!;
   return (
-    <AppShell items={NAV_ITEMS} header={<header><h1>DebtNav</h1></header>} footer={<footer>Footer</footer>}>
-      {NAV_ITEMS.map(item => (
-        <section key={item.id} id={item.id} aria-labelledby={`${item.id}-heading`}>
-          <h2 id={`${item.id}-heading`}>{item.label} section</h2>
-          <button type="button">Inside {item.label}</button>
-        </section>
-      ))}
+    <AppShell items={NAV_ITEMS} activeDashboard={active} onDashboardChange={navigateDashboard}
+      header={<header><h1>DebtNav</h1></header>} footer={<footer>Footer</footer>}>
+      <section id={item.id} aria-labelledby={item.id + '-heading'}>
+        <h2 id={item.id + '-heading'} tabIndex={-1}>{item.label} dashboard</h2>
+        <button type="button">Inside {item.label}</button>
+      </section>
     </AppShell>
   );
 }
@@ -99,43 +119,45 @@ describe('desktop sidebar', () => {
     setSpy.mockRestore();
   });
 
-  it('marks the active section with aria-current="location" and moves it on click (focus goes to the heading)', async () => {
+  it('marks the active section with aria-current="page" and moves it on click (focus goes to the heading)', async () => {
     const user = userEvent.setup();
     render(<Shell />);
-    expect(link('Timeline').getAttribute('aria-current')).toBe('location');
+    expect(link('Overview').getAttribute('aria-current')).toBe('page');
     expect(nav().querySelectorAll('[aria-current]')).toHaveLength(1);
     await user.click(link('Loans'));
-    expect(link('Loans').getAttribute('aria-current')).toBe('location');
-    expect(link('Timeline').hasAttribute('aria-current')).toBe(false);
+    expect(link('Loans').getAttribute('aria-current')).toBe('page');
+    expect(link('Overview').hasAttribute('aria-current')).toBe(false);
+    expect(document.getElementById('overview')).toBeNull();
+    expect(document.getElementById('school')).toBeNull();
     expect(window.location.hash).toBe('#loans');
     expect(document.activeElement?.id).toBe('loans-heading');
     expect(document.activeElement?.getAttribute('tabindex')).toBe('-1');
     // Still highlighted when collapsed.
     await user.click(screen.getByRole('button', { name: 'Collapse navigation' }));
-    expect(link('Loans').getAttribute('aria-current')).toBe('location');
+    expect(link('Loans').getAttribute('aria-current')).toBe('page');
   });
 
   it('restores the initial hash and follows hash changes and browser history', () => {
     window.history.replaceState(null, '', '/#loans');
     render(<Shell />);
-    expect(link('Loans').getAttribute('aria-current')).toBe('location');
+    expect(link('Loans').getAttribute('aria-current')).toBe('page');
     act(() => {
       window.history.pushState(null, '', '#repayment');
       window.dispatchEvent(new HashChangeEvent('hashchange'));
     });
-    expect(link('Repayment').getAttribute('aria-current')).toBe('location');
+    expect(link('Repayment').getAttribute('aria-current')).toBe('page');
     act(() => {
       window.history.replaceState(null, '', '#school');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
-    expect(link('Costs').getAttribute('aria-current')).toBe('location');
+    expect(link('Costs').getAttribute('aria-current')).toBe('page');
     expect(nav().querySelectorAll('[aria-current]')).toHaveLength(1);
   });
 
   it('ignores malformed hash escapes on initial load', () => {
     window.history.replaceState(null, '', '/#%E0%A4%A');
     render(<Shell />);
-    expect(link('Timeline').getAttribute('aria-current')).toBe('location');
+    expect(link('Overview').getAttribute('aria-current')).toBe('page');
   });
 
   it('dismisses a rail tooltip when its scroll container moves or the viewport changes', async () => {
@@ -168,16 +190,14 @@ describe('desktop sidebar', () => {
     expect(document.querySelector('.shell-tooltip')?.textContent).toBe('Results');
   });
 
-  it('pickActiveSection picks the last section whose top passed the reading line', () => {
+  it('keeps the active dashboard when the page scrolls', async () => {
+    const user = userEvent.setup();
     render(<Shell />);
-    const ids = NAV_ITEMS.map(item => item.id);
-    ids.forEach((id, index) => {
-      const top = index * 500 - 1100; // setup -1100 … loans -100, repayment 400 …
-      document.getElementById(id)!.getBoundingClientRect = () => ({ top } as DOMRect);
-    });
-    expect(pickActiveSection(ids, 0)).toBe('loans');
-    expect(pickActiveSection(ids, 300)).toBe('repayment');
-    expect(pickActiveSection(['missing'], 0)).toBeNull();
+    await user.click(link('Loans'));
+    fireEvent.scroll(window);
+    expect(link('Loans').getAttribute('aria-current')).toBe('page');
+    expect(document.querySelectorAll('main > section')).toHaveLength(1);
+    expect(document.getElementById('overview')).toBeNull();
   });
 });
 
@@ -235,7 +255,7 @@ describe('narrow-screen drawer', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement?.id).toBe('scenarios-heading');
     expect(window.location.hash).toBe('#scenarios');
-    expect(link('Scenarios').getAttribute('aria-current')).toBe('location');
+    expect(link('Scenarios').getAttribute('aria-current')).toBe('page');
   });
 
   it('traps Tab inside the open drawer', async () => {

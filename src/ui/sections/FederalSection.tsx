@@ -15,11 +15,20 @@ import { formatCurrency, formatDate, formatMonthYear } from '../format';
 export function FederalSection() {
   return (
     <section id="federal" className="panel" aria-labelledby="federal-heading">
-      <h2 id="federal-heading">7. Federal rules and earnings context</h2>
+      <h2 id="federal-heading">Federal rules &amp; earnings context</h2>
       <p className="section-intro">Optional checks based on published federal reference data (snapshot as of {formatDate(ref.asOf)}). They never block your plan.</p>
-      <LoanLimits />
-      <RepaymentPlanComparison />
-      <ScorecardLookup />
+      <details className="editor-panel federal-panel" open>
+        <summary>Review federal loan limits</summary>
+        <LoanLimits />
+      </details>
+      <details className="editor-panel federal-panel">
+        <summary>Compare federal repayment plans</summary>
+        <RepaymentPlanComparison />
+      </details>
+      <details className="editor-panel federal-panel">
+        <summary>Explore program earnings</summary>
+        <ScorecardLookup />
+      </details>
     </section>
   );
 }

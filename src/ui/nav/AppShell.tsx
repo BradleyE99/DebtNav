@@ -10,21 +10,25 @@
  * Narrow screens (≤ 768 px): a compact sticky top bar with a Menu button that opens the sidebar as a
  * modal off-canvas drawer (backdrop, Escape, focus trap, inert page, scroll lock).
  */
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import type { NavItem } from './navItems';
 import { ShellIcon } from './icons';
 import { SIDEBAR_ID, Sidebar } from './Sidebar';
-import { useActiveSection } from './useActiveSection';
+import { navigateDashboard } from './navigation';
 import { useMediaQuery } from './useMediaQuery';
 import { useSidebarPreference } from './useSidebarPreference';
 import './sidebar.css';
 
 export interface AppShellProps {
   items: readonly NavItem[];
+  activeDashboard?: string;
+  onDashboardChange?(id: string): void;
   header: ReactNode;
   banner?: ReactNode;
   children: ReactNode;
   footer: ReactNode;
+  /** Per-dashboard count of items still needed, shown as sidebar badges. */
+  badges?: Partial<Record<string, number>>;
 }
 
 /** Keep in sync with the media queries in sidebar.css. */
@@ -43,7 +47,7 @@ export function goToSection(id: string): void {
   heading.focus({ preventScroll: true });
 }
 
-export function AppShell({ items, header, banner, children, footer }: AppShellProps) {
+export function AppShell({ items, header, banner, children, footer, activeDashboard, onDashboardChange, badges }: AppShellProps) {
   const isDrawer = useMediaQuery(DRAWER_QUERY);
   const [collapsed, setCollapsed] = useSidebarPreference();
   const [drawerRequested, setDrawerRequested] = useState(false);
@@ -64,16 +68,28 @@ export function AppShell({ items, header, banner, children, footer }: AppShellPr
   /** Runs once the drawer has closed and the page is interactive again. */
   const afterClose = useRef<(() => void) | null>(null);
 
-  const getTopOffset = useCallback(() => topbarRef.current?.offsetHeight ?? 0, []);
-  const [active, selectSection] = useActiveSection(items.map(item => item.id), getTopOffset);
+  const [fallbackActive, selectSection] = useState(items[0]?.id ?? 'overview');
+  const active = activeDashboard ?? fallbackActive;
+  const lastFocused = useRef<HTMLElement | null>(null);
+  const previousDrawerLayout = useRef(isDrawer);
+  useEffect(() => {
+    const rememberFocus = (event: FocusEvent) => {
+      if (event.target instanceof HTMLElement && event.target !== document.body) lastFocused.current = event.target;
+    };
+    document.addEventListener('focusin', rememberFocus);
+    return () => document.removeEventListener('focusin', rememberFocus);
+  }, []);
 
   useEffect(() => {
+    const layoutChanged = previousDrawerLayout.current !== isDrawer;
+    previousDrawerLayout.current = isDrawer;
+    const focusBeforeResize = layoutChanged ? lastFocused.current : null;
     if (!drawerOpen) {
       const pending = afterClose.current;
       afterClose.current = null;
       if (pending) pending();
-      else if (isDrawer && sidebarRef.current?.contains(document.activeElement)) menuRef.current?.focus();
-      else if (!isDrawer && (document.activeElement === closeRef.current || document.activeElement === menuRef.current)) {
+      else if (isDrawer && (sidebarRef.current?.contains(document.activeElement) || (focusBeforeResize && sidebarRef.current?.contains(focusBeforeResize)))) menuRef.current?.focus();
+      else if (!isDrawer && (document.activeElement === closeRef.current || document.activeElement === menuRef.current || focusBeforeResize === closeRef.current || focusBeforeResize === menuRef.current)) {
         sidebarRef.current?.querySelector<HTMLButtonElement>('.shell-toggle')?.focus();
       }
       return;
@@ -108,9 +124,13 @@ export function AppShell({ items, header, banner, children, footer }: AppShellPr
     // Let modified clicks (new tab/window) behave natively.
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    selectSection(id);
-    if (drawerOpen) closeDrawer(() => goToSection(id));
-    else goToSection(id);
+    const switchView = () => {
+      selectSection(id);
+      if (onDashboardChange) onDashboardChange(id);
+      else navigateDashboard(id);
+    };
+    if (drawerOpen) closeDrawer(switchView);
+    else switchView();
   }
 
   function trapTab(event: KeyboardEvent<HTMLDivElement>) {
@@ -128,7 +148,12 @@ export function AppShell({ items, header, banner, children, footer }: AppShellPr
 
   return (
     <div className="shell" data-sidebar={railCollapsed ? 'collapsed' : 'expanded'} data-drawer={drawerOpen ? 'open' : 'closed'}>
-      <a ref={skipRef} className="skip-link" href="#main">Skip to your plan</a>
+      <a ref={skipRef} className="skip-link" href="#main" onClick={event => {
+        event.preventDefault();
+        const main = document.getElementById('main');
+        main?.focus({ preventScroll: true });
+        main?.scrollIntoView?.({ block: 'start' });
+      }}>Skip to your plan</a>
       <div ref={topbarRef} className="shell-topbar">
         <button
           type="button"
@@ -168,6 +193,7 @@ export function AppShell({ items, header, banner, children, footer }: AppShellPr
           onClose={() => closeDrawer()}
           onNavigate={onNavigate}
           closeRef={closeRef}
+          badges={badges}
         />
       </div>
       <div ref={contentRef} className="shell-content">

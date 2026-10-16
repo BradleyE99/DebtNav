@@ -8,6 +8,7 @@ import { formatCurrency, strategyName } from '../format';
 import { listStrategies } from '../../engine/strategies/registry';
 import { updateScenario } from '../planUpdates';
 import { newId } from '../ids';
+import './compact-records.css';
 
 type PathInfo = ReturnType<typeof overridablePaths>[number];
 
@@ -15,23 +16,31 @@ const COMMON_PATHS = ['postGradIncome.annualSalary', 'postGradIncome.monthlyDebt
 
 export function ScenariosSection() {
   const { plan, update } = usePlanner();
+  const [newScenarioId, setNewScenarioId] = useState<string | null>(null);
   function addScenario() {
     const id = newId();
-    update(p => ({ ...p, scenarios: [...p.scenarios, { id, name: `Scenario ${p.scenarios.length + 1}`, overrides: {} }] }));
-    requestAnimationFrame(() => document.getElementById(`scenarios.${id}.name`)?.focus());
+    const result = update(p => ({ ...p, scenarios: [...p.scenarios, { id, name: `Scenario ${p.scenarios.length + 1}`, overrides: {} }] }));
+    if (result.ok) {
+      setNewScenarioId(id);
+      requestAnimationFrame(() => document.getElementById(`scenarios.${id}.name`)?.focus());
+    }
   }
   return (
     <section id="scenarios" className="panel" aria-labelledby="scenarios-heading">
-      <h2 id="scenarios-heading" tabIndex={-1}>6. What-if scenarios</h2>
+      <h2 id="scenarios-heading" tabIndex={-1}>What-if scenarios</h2>
       <p className="section-intro">A scenario starts identical to your plan. Only the fields you change are stored; everything else follows your base plan as you edit it.</p>
-      {plan.scenarios.length === 0 && <p className="empty">No scenarios yet. Try a conservative one with a lower salary.</p>}
-      {plan.scenarios.map(scenario => <ScenarioCard key={scenario.id} scenario={scenario} />)}
       <button type="button" className="button-primary" onClick={addScenario} disabled={plan.scenarios.length >= 20}>Add scenario</button>
+      <p className="field-hint">{plan.scenarios.length} scenario{plan.scenarios.length === 1 ? '' : 's'} · {plan.scenarios.reduce((total, scenario) => total + Object.keys(scenario.overrides).length, 0)} changed assumptions. Open a card to edit.</p>
+      {plan.scenarios.length === 0 && <p className="empty">No scenarios yet. Try a conservative one with a lower salary.</p>}
+      <div className="compact-record-grid">
+        {plan.scenarios.map(scenario => <ScenarioCard key={scenario.id} scenario={scenario} initiallyOpen={scenario.id === newScenarioId} />)}
+      </div>
     </section>
   );
 }
 
-function ScenarioCard({ scenario }: { scenario: Scenario }) {
+function ScenarioCard({ scenario, initiallyOpen }: { scenario: Scenario; initiallyOpen: boolean }) {
+  const [open, setOpen] = useState(initiallyOpen);
   const { plan, update, remove } = usePlanner();
   const paths = useMemo(() => overridablePaths(plan), [plan]);
   const [added, setAdded] = useState<string[]>([]);
@@ -51,8 +60,13 @@ function ScenarioCard({ scenario }: { scenario: Scenario }) {
   }
 
   return (
-    <article className="scenario-card" aria-labelledby={headingId}>
-      <h3 id={headingId}>{scenario.name} <span className="subtle">{overrideCount === 0 ? 'Same as base plan' : `${overrideCount} field${overrideCount === 1 ? '' : 's'} changed`}</span></h3>
+    <details className="scenario-card compact-record-card" aria-labelledby={headingId} open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+      <summary>
+        <h3 id={headingId}>{scenario.name}</h3>
+        <span className="compact-record-meta">{overrideCount === 0 ? 'Same as base plan' : overrideCount + ' changed assumption' + (overrideCount === 1 ? '' : 's')}</span>
+        <span className="compact-record-edit">Edit scenario</span>
+      </summary>
+      <div className="compact-record-body">
       <TextField id={`scenarios.${scenario.id}.name`} label="Scenario name" value={scenario.name}
         onCommit={name => update(p => updateScenario(p, scenario.id, { name }))} className="field--wide" />
 
@@ -98,7 +112,8 @@ function ScenarioCard({ scenario }: { scenario: Scenario }) {
           Remove scenario<span className="visually-hidden"> {scenario.name}</span>
         </button>
       </div>
-    </article>
+      </div>
+    </details>
   );
 }
 

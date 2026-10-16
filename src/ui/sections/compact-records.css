@@ -1,0 +1,9 @@
+.compact-record-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; align-items: start; margin: 1rem 0; }
+.compact-record-grid > .compact-record-card { margin: 0; min-width: 0; }
+.compact-record-card[open] { grid-column: 1 / -1; }
+.compact-record-card > summary { cursor: pointer; overflow-wrap: anywhere; }
+.compact-record-card > summary h3 { display: inline; margin: 0; font-size: 1rem; }
+.compact-record-meta { display: block; font-size: .8rem; color: var(--muted, #53615e); margin: .35rem 0; }
+.compact-record-edit { display: block; margin-top: .4rem; color: var(--accent, #17694f); font-size: .8rem; }
+.compact-record-body { margin-top: 1rem; }
+@media (max-width: 680px) { .compact-record-grid { grid-template-columns: minmax(0, 1fr); } }

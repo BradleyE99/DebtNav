@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
-import { memoryStorage, renderPlanner, samplePlan } from './testing/renderPlanner';
+import { memoryStorage, navigateTo, renderPlanner, samplePlan } from './testing/renderPlanner';
 
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); vi.useRealTimers(); });
 
 const byId = (id: string) => {
   const element = document.getElementById(id);
@@ -18,7 +18,7 @@ function jsonFile(text: string): File {
   Object.defineProperty(file, 'text', { value: async () => text });
   return file;
 }
-const keyGap = () => screen.getByTestId('key-gap').textContent;
+const keyGap = () => (screen.queryByTestId('key-gap') ?? document.querySelector('.gap-main dd'))?.textContent;
 const keyInterest = () => screen.getByTestId('key-interest').textContent;
 
 function firstYearId(plan = samplePlan()) { return plan.schoolYears[0].id; }
@@ -27,6 +27,7 @@ describe('editable fields', () => {
   it('lets the user clear a money field (error, results keep last valid) and type a new value (results update)', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('school', true);
     const yearId = firstYearId();
     const amount = byId(`schoolYears.${yearId}.costItems.cost-1.amount`);
     expect(screen.getAllByLabelText('Amount')).toContain(amount);
@@ -57,13 +58,14 @@ describe('editable fields', () => {
   it("accepts '55,000' and '$400', and rejects 'abc' without committing", async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('income', true);
     const salary = screen.getByLabelText('Expected annual salary') as HTMLInputElement;
     await user.tripleClick(salary);
     await user.keyboard('55,000');
     expect(salary.getAttribute('aria-invalid')).toBeNull();
     expect(view.plan().postGradIncome.annualSalary).toBe('55000.00');
 
-    const budget = screen.getByLabelText('Monthly amount for all loans') as HTMLInputElement;
+    const budget = screen.getByLabelText('Monthly amount available for loan payments') as HTMLInputElement;
     await user.clear(budget);
     await user.type(budget, '$400');
     expect(view.plan().postGradIncome.monthlyDebtBudget).toBe('400.00');
@@ -79,6 +81,7 @@ describe('editable fields', () => {
   it('shows the rate as a percent and stores the annual fraction; rejects rates over 30%', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans', true);
     const rate = byId('loans.loan-a.annualRate');
     expect(rate.value).toBe('5');
     await user.clear(rate);
@@ -94,10 +97,12 @@ describe('editable fields', () => {
   it('follows values changed elsewhere (undo after removal restores the field)', async () => {
     const user = userEvent.setup();
     renderPlanner({ plan: samplePlan() });
+    navigateTo('school', true);
     const yearId = firstYearId();
     await user.click(screen.getByRole('button', { name: 'Remove cost Tuition' }));
     expect(document.getElementById(`schoolYears.${yearId}.costItems.cost-1.amount`)).toBeNull();
-    expect(keyGap()).toBe('$0.00');
+    // A year with no costs reads "Needs costs", never a misleading $0.00 gap.
+    expect(keyGap()).toBe('Needs costs');
     await user.click(within(screen.getByText(/Remove cost "Tuition"/).closest('.undo-bar') as HTMLElement).getByRole('button', { name: 'Undo' }));
     expect(byId(`schoolYears.${yearId}.costItems.cost-1.amount`).value).toBe('10,000.00');
     expect(keyGap()).toBe('$6,000.00');
@@ -108,6 +113,7 @@ describe('school timeline', () => {
   it('keeps every year\'s costs when the start date changes (commits after the date settles)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('setup', true);
     const before = view.plan();
     const start = byId('settings.startDate');
     fireEvent.change(start, { target: { value: '2026-09-01' } });
@@ -117,11 +123,13 @@ describe('school timeline', () => {
     expect(after.settings.startDate).toBe('2026-09-01');
     expect(after.schoolYears[0].id).toBe(before.schoolYears[0].id);
     expect(after.schoolYears[0].costItems).toHaveLength(1);
+    navigateTo('school', true);
     expect(byId(`schoolYears.${after.schoolYears[0].id}.costItems.cost-1.amount`).value).toBe('10,000.00');
   });
 
   it('shows a field error and keeps the text when graduation is before the start date', () => {
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('setup', true);
     const graduation = byId('settings.graduationDate');
     fireEvent.change(graduation, { target: { value: '2020-01-01' } });
     fireEvent.blur(graduation);
@@ -135,6 +143,7 @@ describe('school timeline', () => {
     const user = userEvent.setup();
     const plan = samplePlan();
     const view = renderPlanner({ plan });
+    navigateTo('setup', true);
     const graduation = byId('settings.graduationDate');
     fireEvent.change(graduation, { target: { value: plan.schoolYears[0].endDate } });
     fireEvent.keyDown(graduation, { key: 'Enter' });
@@ -145,10 +154,14 @@ describe('school timeline', () => {
     expect(view.plan().schoolYears).toHaveLength(plan.schoolYears.length);
     // Add data to the last year, then remove it by shortening the timeline.
     const lastYear = view.plan().schoolYears.at(-1)!;
+    navigateTo('school', true);
+    await user.selectOptions(screen.getByLabelText('School year'), lastYear.id);
     await user.click(screen.getByRole('button', { name: `Add cost to Year ${plan.schoolYears.length}` }));
     expect(view.plan().schoolYears.at(-1)!.costItems).toHaveLength(1);
-    fireEvent.change(graduation, { target: { value: lastYear.startDate } });
-    fireEvent.blur(graduation);
+    navigateTo('setup');
+    const currentGraduation = byId('settings.graduationDate');
+    fireEvent.change(currentGraduation, { target: { value: lastYear.startDate } });
+    fireEvent.blur(currentGraduation);
     expect(view.plan().schoolYears.length).toBeLessThan(plan.schoolYears.length);
     expect(screen.getByText(/removed by this date change/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Undo' }));
@@ -161,6 +174,7 @@ describe('records', () => {
   it('adds, edits, and removes costs and resources', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('school', true);
     await user.click(screen.getByRole('button', { name: 'Add cost to Year 1' }));
     const item = view.plan().schoolYears[0].costItems[1];
     const amount = byId(`schoolYears.${view.plan().schoolYears[0].id}.costItems.${item.id}.amount`);
@@ -173,20 +187,27 @@ describe('records', () => {
     await user.click(screen.getByRole('button', { name: 'Add resource to Year 1' }));
     const resource = view.plan().schoolYears[0].resources[1];
     const base = `schoolYears.${view.plan().schoolYears[0].id}.resources.${resource.id}`;
-    await user.selectOptions(byId(`${base}.type`), 'job');
-    await user.selectOptions(byId(`${base}.incomeMode`), 'hourly');
-    // $15 × 15 h × 30 weeks = $6,750 → gap 12,000 − 10,750 = 1,250.
-    expect(keyGap()).toBe('$1,250.00');
-    await user.clear(byId(`${base}.unavailablePercent`));
-    await user.type(byId(`${base}.unavailablePercent`), '40');
-    expect(view.plan().schoolYears[0].resources[1].unavailablePercent).toBe('40');
+    await user.selectOptions(byId(`${base}.type`), 'savings');
+    navigateTo('income');
+    await user.click(screen.getByRole('button', { name: 'Add earnings' }));
+    const job = view.plan().schoolYears[0].resources[2];
+    const jobBase = `schoolYears.${view.plan().schoolYears[0].id}.resources.${job.id}`;
+    await user.clear(byId(`${jobBase}.hourlyWage`));
+    await user.type(byId(`${jobBase}.hourlyWage`), '15');
+    // $15 × 15 h × 30 weeks = $6,750; 60% is available for school.
+    await user.clear(byId(`${jobBase}.unavailablePercent`));
+    await user.type(byId(`${jobBase}.unavailablePercent`), '60');
+    expect(view.plan().schoolYears[0].resources[2].unavailablePercent).toBe('40');
+    navigateTo('school', true);
+    expect(keyGap()).toBe('$3,950.00');
     await user.click(screen.getByRole('button', { name: /Remove resource Grant/ }));
-    expect(view.plan().schoolYears[0].resources).toHaveLength(1);
+    expect(view.plan().schoolYears[0].resources).toHaveLength(2);
   });
 
   it('adds, edits, and removes a loan; total debt updates', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans', true);
     expect(screen.getByText(/Total borrowed:/).textContent).toContain('$25,000.00');
     await user.click(screen.getByRole('button', { name: 'Add loan' }));
     const loan = view.plan().loans[2];
@@ -206,20 +227,25 @@ describe('records', () => {
   it('creates a loan from the gap pre-filled with gap + buffer, with a mismatch notice when the gap changes', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: { ...samplePlan(), loans: [], repayment: { ...samplePlan().repayment, customOrder: [] } } });
+    navigateTo('school', true);
     await user.click(screen.getByRole('button', { name: 'Create loan from gap for Year 1' }));
     const [loan] = view.plan().loans;
     expect(loan.principal).toBe('6000.00');
     expect(document.activeElement?.id).toBe(`loans.${loan.id}.name`);
+    navigateTo('school', true);
     const amount = byId(`schoolYears.${view.plan().schoolYears[0].id}.costItems.cost-1.amount`);
     await user.clear(amount);
     await user.type(amount, '11000');
     expect(view.plan().loans[0].principal).toBe('6000.00');
+    navigateTo('loans');
+    await user.click(screen.getByRole('button', { name: 'Expand all' }));
     expect(screen.getByText(/The loan was not changed/)).toBeTruthy();
   });
 
   it('adds, edits, and removes a life event with an impact sentence', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('events', true);
     await user.click(screen.getByRole('button', { name: 'Add life event' }));
     const event = view.plan().lifeEvents[0];
     const amount = byId(`lifeEvents.${event.id}.amount`);
@@ -236,6 +262,7 @@ describe('records', () => {
   it('adds a scenario, stores only changed overrides, resets to base, and removes it', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('scenarios', true);
     await user.click(screen.getByRole('button', { name: 'Add scenario' }));
     const scenario = view.plan().scenarios[0];
     const salaryId = `scenarios.${scenario.id}.overrides.postGradIncome.monthlyDebtBudget`;
@@ -247,7 +274,10 @@ describe('records', () => {
     await user.clear(budget);
     await user.type(budget, '900');
     expect(view.plan().scenarios[0].overrides).toEqual({ 'postGradIncome.monthlyDebtBudget': '900.00' });
+    navigateTo('results');
+    await user.selectOptions(screen.getByLabelText('Explore results'), 'scenarios');
     expect(await screen.findByText(/^Debt-free (between|in) /)).toBeTruthy();
+    navigateTo('scenarios');
 
     // Any-field picker.
     await user.selectOptions(byId(`scenarios.${scenario.id}.picker`), 'loans.loan-a.annualRate');
@@ -271,11 +301,17 @@ describe('repayment', () => {
   it('changing the strategy updates results', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('repayment', true);
+    navigateTo('overview');
     const avalancheInterest = keyInterest();
+    navigateTo('repayment');
     await user.selectOptions(screen.getByLabelText('Payoff strategy'), 'snowball');
     expect(view.plan().repayment.strategyId).toBe('snowball');
+    navigateTo('overview');
     expect(keyInterest()).not.toBe(avalancheInterest);
-    const table = screen.getByRole('table', { name: /Same plan, different payoff orders/ });
+    navigateTo('results');
+    await user.selectOptions(screen.getByLabelText('Explore results'), 'strategies');
+    const table = await screen.findByRole('table', { name: /Same plan, different payoff orders/ });
     expect(within(table).getByText('Your choice').closest('tr')?.textContent).toMatch(/Snowball/);
     expect(table.textContent).not.toMatch(/\bbest\b/i);
   });
@@ -283,7 +319,10 @@ describe('repayment', () => {
   it('reorders the custom payoff order with keyboard-accessible buttons', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('repayment', true);
+    document.querySelector<HTMLDetailsElement>('.order-details')?.setAttribute('open', '');
     const down = screen.getByRole('button', { name: 'Move down Alpha loan' });
+    await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
     down.focus();
     await user.keyboard('{Enter}');
     expect(view.plan().repayment.customOrder).toEqual(['loan-b', 'loan-a']);
@@ -295,20 +334,26 @@ describe('repayment', () => {
   it('warns about a budget shortfall and negative amortization without a debt-free date', async () => {
     const user = userEvent.setup();
     renderPlanner({ plan: samplePlan() });
-    const budget = screen.getByLabelText('Monthly amount for all loans');
+    navigateTo('income', true);
+    const budget = screen.getByLabelText('Monthly amount available for loan payments');
     await user.clear(budget);
     await user.type(budget, '50');
+    navigateTo('repayment');
     expect(screen.getByText(/short of the minimum payments/)).toBeTruthy();
+    navigateTo('results');
     expect(screen.getByText(/payments don't cover the interest/)).toBeTruthy();
+    navigateTo('overview');
     expect(screen.getByTestId('key-debt-free').textContent).toBe('No debt-free date');
   });
 
   it('pages through the amortization schedule', async () => {
     const user = userEvent.setup();
     renderPlanner({ plan: samplePlan() });
-    expect(screen.getByRole('table', { name: /All loans combined: months 1–24 of/ })).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Next 24 months' }));
-    expect(screen.getByRole('table', { name: /months 25–48 of/ })).toBeTruthy();
+    navigateTo('results', true);
+    await user.selectOptions(screen.getByLabelText('Explore results'), 'schedule');
+    expect(screen.getByRole('table', { name: /All loans combined: months 1–12 of/ })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Next 12 months' }));
+    expect(screen.getByRole('table', { name: /months 13–24 of/ })).toBeTruthy();
     await user.selectOptions(screen.getByLabelText('Show'), 'loan-b');
     expect(screen.getByRole('table', { name: /Beta loan: months 1–/ })).toBeTruthy();
   });
@@ -328,6 +373,7 @@ describe('data and disclaimer', () => {
   it('delete dialog: focus moves in, Tab is trapped, Escape cancels and returns focus, confirm deletes', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('data', true);
     const trigger = screen.getByRole('button', { name: 'Delete all my data' });
     await user.click(trigger);
     const dialog = screen.getByRole('alertdialog', { name: 'Delete all DebtNav data?' });
@@ -354,14 +400,18 @@ describe('data and disclaimer', () => {
   it('imports a valid file and rejects an invalid one without changing the plan', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('income', true);
     const exported = view.store().exportJson();
     if (!exported.ok) throw new Error('export failed');
-    const budget = screen.getByLabelText('Monthly amount for all loans');
+    const budget = screen.getByLabelText('Monthly amount available for loan payments');
     await user.clear(budget);
     await user.type(budget, '700');
+    navigateTo('data');
     await user.upload(screen.getByLabelText('Import plan (JSON)'), jsonFile(exported.value));
     expect(await screen.findByText(/Plan imported/)).toBeTruthy();
-    expect((screen.getByLabelText('Monthly amount for all loans') as HTMLInputElement).value).toBe('600.00');
+    navigateTo('income');
+    expect((screen.getByLabelText('Monthly amount available for loan payments') as HTMLInputElement).value).toBe('600.00');
+    navigateTo('data');
     await user.upload(screen.getByLabelText('Import plan (JSON)'), jsonFile('{bad'));
     expect(await screen.findByText(/Import failed; your current plan is unchanged/)).toBeTruthy();
     expect(view.plan().postGradIncome.monthlyDebtBudget).toBe('600.00');

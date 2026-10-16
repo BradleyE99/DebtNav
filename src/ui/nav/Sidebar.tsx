@@ -14,14 +14,18 @@ interface SidebarProps {
   onClose(): void;
   onNavigate(id: string, event: MouseEvent<HTMLAnchorElement>): void;
   closeRef: Ref<HTMLButtonElement>;
+  /** Items still needed per dashboard id (readiness missing + invalid); 0 or absent shows no badge. */
+  badges?: Partial<Record<string, number>>;
 }
+
+const neededText = (count: number) => `${count} item${count === 1 ? '' : 's'} needed`;
 
 interface Tip { text: string; top: number; left: number }
 
 /** Delay before a hover tooltip hides, so the pointer can move onto it (WCAG 1.4.13 hoverable). */
 const HIDE_DELAY_MS = 120;
 
-export function Sidebar({ items, active, rail, collapsed, onToggle, onClose, onNavigate, closeRef }: SidebarProps) {
+export function Sidebar({ items, active, rail, collapsed, onToggle, onClose, onNavigate, closeRef, badges = {} }: SidebarProps) {
   const [tip, setTip] = useState<Tip | null>(null);
   const hideTimer = useRef<number | undefined>(undefined);
 
@@ -82,24 +86,32 @@ export function Sidebar({ items, active, rail, collapsed, onToggle, onClose, onN
       </div>
       <nav className="shell-nav" aria-label="Planner sections" onScroll={hideNow}>
         <ul>
-          {items.map(item => (
-            <li key={item.id}>
-              <a
-                className="shell-link"
-                href={`#${item.id}`}
-                aria-current={item.id === active ? 'location' : undefined}
-                onClick={event => { hideNow(); onNavigate(item.id, event); }}
-                data-tip={item.label}
-                onMouseEnter={showFor}
-                onMouseLeave={hideSoon}
-                onFocus={showFor}
-                onBlur={hideNow}
-              >
-                <ShellIcon name={item.icon} />
-                <span className="shell-label">{item.label}</span>
-              </a>
-            </li>
-          ))}
+          {items.map(item => {
+            const count = badges[item.id] ?? 0;
+            const badgeId = `${SIDEBAR_ID}-${item.id}-needed`;
+            return (
+              <li key={item.id}>
+                {/* The count is a description (hidden text referenced by id), not part of the name, so the link keeps its plain label. */}
+                <a
+                  className="shell-link"
+                  href={`#${item.id}`}
+                  aria-current={item.id === active ? 'page' : undefined}
+                  aria-describedby={count > 0 ? badgeId : undefined}
+                  onClick={event => { hideNow(); onNavigate(item.id, event); }}
+                  data-tip={count > 0 ? `${item.label} · ${neededText(count)}` : item.label}
+                  onMouseEnter={showFor}
+                  onMouseLeave={hideSoon}
+                  onFocus={showFor}
+                  onBlur={hideNow}
+                >
+                  <ShellIcon name={item.icon} />
+                  <span className="shell-label">{item.label}</span>
+                  {count > 0 && <span className="shell-badge" aria-hidden="true">{count}</span>}
+                </a>
+                {count > 0 && <span id={badgeId} hidden>{neededText(count)}</span>}
+              </li>
+            );
+          })}
         </ul>
       </nav>
       {rail && tip && (

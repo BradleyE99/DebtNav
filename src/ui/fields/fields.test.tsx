@@ -5,11 +5,11 @@
  * type a valid value (it commits immediately and the results update — no Calculate button).
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { renderPlanner, samplePlan } from '../testing/renderPlanner';
+import { navigateTo, renderPlanner, samplePlan } from '../testing/renderPlanner';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); });
 
 const byId = (id: string) => {
   const element = document.getElementById(id);
@@ -35,6 +35,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('money: cost amount', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('school', true);
     const id = `schoolYears.${yearId}.costItems.cost-1.amount`;
     const field = byId(id);
     expect(figure(yearCard(), 'Borrowing gap (a calculation, not a recommendation)')).toBe('$6,000.00');
@@ -61,6 +62,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('percent: borrowing buffer', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('school', true);
     const id = `schoolYears.${yearId}.bufferPercent`;
     const field = byId(id);
     await user.click(field);
@@ -82,6 +84,8 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('rate: loan interest rate shown as percent, stored as a fraction', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     const id = 'loans.loan-a.annualRate';
     const field = byId(id);
     const before = figure(loanCard('loan-a'), 'Minimum monthly payment');
@@ -105,6 +109,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('integer: grace period', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('setup');
     const field = byId('settings.graceMonths');
     const setup = byId('setup-heading').closest('section') as HTMLElement;
     expect(setup.textContent).toContain('Repayment starts Nov 20, 2030');
@@ -128,6 +133,8 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('date: loan disbursement date (blank is an error, never a default)', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     const id = 'loans.loan-a.disbursementDate';
     const field = byId(id);
     const original = view.plan().loans[0].disbursementDate;
@@ -149,6 +156,8 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('text: loan name (blank is an error and the stored name is kept)', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     const id = 'loans.loan-a.name';
     const field = byId(id);
     await user.click(field);
@@ -167,12 +176,16 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     expect(field.getAttribute('aria-invalid')).toBeNull();
     expect(view.plan().loans[0].name).toBe('Stafford');
     expect(byId('loans.loan-a-heading').textContent).toContain('Stafford');
+    navigateTo('results');
+    await user.selectOptions(screen.getByLabelText('Explore results'), 'loans');
     expect(within(screen.getByRole('region', { name: 'Loans at repayment table' })).getByText('Stafford')).toBeTruthy();
   });
 
   it('select: loan type changes in-school interest', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     const field = byId('loans.loan-a.type') as unknown as HTMLSelectElement;
     expect(figure(loanCard('loan-a'), 'Interest before repayment')).not.toBe('$0.00');
     await user.selectOptions(field, 'subsidized');
@@ -185,6 +198,8 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('checkbox: "I pay interest while in school" shows the monthly cost and stops capitalization', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('loans');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     const field = byId('loans.loan-a.payInterestWhileInSchool');
     expect(figure(loanCard('loan-a'), 'Interest added at repayment')).not.toBe('$0.00');
     await user.click(field);
@@ -204,6 +219,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('valid edits persist (saved document) and reload into the fields', async () => {
     const user = userEvent.setup();
     const first = renderPlanner({ plan: samplePlan() });
+    navigateTo('income');
     const salary = screen.getByLabelText('Expected annual salary') as HTMLInputElement;
     await user.click(salary);
     await user.clear(salary);
@@ -213,6 +229,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     const storage = first.storage;
     cleanup();
     renderPlanner({ storage });
+    navigateTo('income');
     expect((screen.getByLabelText('Expected annual salary') as HTMLInputElement).value).toBe('61,250.00');
   });
 });

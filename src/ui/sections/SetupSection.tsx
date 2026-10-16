@@ -32,7 +32,7 @@ export function SetupSection() {
 
   return (
     <section id="setup" className="panel" aria-labelledby="setup-heading">
-      <h2 id="setup-heading">1. Your school timeline</h2>
+      <h2 id="setup-heading">School timeline</h2>
       <p className="section-intro">Enter when school starts and when you expect to graduate. DebtNav creates one school year per academic year and keeps the data of every year that still exists when you change these dates.</p>
       <div className="field-grid">
         <DateField id="settings.startDate" label="School start date" settle value={plan.settings.startDate} onCommit={value => commitDate('startDate', value)} />

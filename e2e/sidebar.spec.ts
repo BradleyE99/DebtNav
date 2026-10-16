@@ -5,6 +5,8 @@ import AxeBuilder from '@axe-core/playwright';
 // Run with: E2E_PORT=5191 npx playwright test e2e/sidebar.spec.ts
 
 const SECTIONS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'income', label: 'Income & Earnings' },
   { id: 'setup', label: 'Timeline' },
   { id: 'school', label: 'Costs' },
   { id: 'loans', label: 'Loans' },
@@ -60,41 +62,38 @@ test.beforeEach(async ({ page }) => {
 
 // ------------------------------------------------------------------ desktop sidebar
 
-test('every sidebar link scrolls to its section, focuses its heading and becomes active', async ({ page }) => {
+test('every sidebar link opens only its dashboard, focuses its heading and becomes active', async ({ page }) => {
   for (const { id, label } of SECTIONS) {
     await navLink(page, label).click();
-    await expect(page.locator(`#${id}`)).toBeInViewport();
-    await expect(page).toHaveURL(new RegExp(`#${id}$`));
-    await expect(page.locator(`#${id}-heading`)).toBeFocused();
-    await expect(navLink(page, label)).toHaveAttribute('aria-current', 'location');
+    await expect(page.locator('#' + id)).toBeInViewport();
+    await expect(page).toHaveURL(new RegExp('#' + id + '$'));
+    await expect(page.locator('#' + id + '-heading')).toBeFocused();
+    await expect(navLink(page, label)).toHaveAttribute('aria-current', 'page');
     await expect(nav(page).locator('[aria-current]')).toHaveCount(1);
+    for (const other of SECTIONS.filter(item => item.id !== id)) {
+      await expect(page.locator('main #' + other.id)).toHaveCount(0);
+    }
+    await page.mouse.move(800, 400);
+    await page.mouse.wheel(0, 10000);
+    await expect(navLink(page, label)).toHaveAttribute('aria-current', 'page');
   }
-  // Scroll spy (no clicks): scrolling the page moves the highlight, and the page bottom activates the last section.
-  await page.waitForTimeout(1000);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await expect(navLink(page, 'Timeline')).toHaveAttribute('aria-current', 'location');
-  await page.evaluate(() => document.getElementById('repayment')!.scrollIntoView());
-  await expect(navLink(page, 'Repayment')).toHaveAttribute('aria-current', 'location');
-  await page.mouse.move(800, 400);
-  await page.mouse.wheel(0, 100000);
-  await expect(navLink(page, 'Your data')).toHaveAttribute('aria-current', 'location');
 });
 
 test('direct section URLs and Back/Forward keep the navigation highlight in sync', async ({ page }) => {
   await page.goto('/#loans');
-  await expect(navLink(page, 'Loans')).toHaveAttribute('aria-current', 'location');
+  await expect(navLink(page, 'Loans')).toHaveAttribute('aria-current', 'page');
   await page.reload();
-  await expect(navLink(page, 'Loans')).toHaveAttribute('aria-current', 'location');
+  await expect(navLink(page, 'Loans')).toHaveAttribute('aria-current', 'page');
   await navLink(page, 'Repayment').click();
   await navLink(page, 'Scenarios').click();
   await page.goBack();
   await expect(page).toHaveURL(/#repayment$/);
-  await expect(navLink(page, 'Repayment')).toHaveAttribute('aria-current', 'location');
+  await expect(navLink(page, 'Repayment')).toHaveAttribute('aria-current', 'page');
   await page.goForward();
   await expect(page).toHaveURL(/#scenarios$/);
-  await expect(navLink(page, 'Scenarios')).toHaveAttribute('aria-current', 'location');
+  await expect(navLink(page, 'Scenarios')).toHaveAttribute('aria-current', 'page');
   await page.evaluate(() => { window.location.hash = 'school'; });
-  await expect(navLink(page, 'Costs')).toHaveAttribute('aria-current', 'location');
+  await expect(navLink(page, 'Costs')).toHaveAttribute('aria-current', 'page');
 });
 
 test('sidebar stays visible while scrolling and does not cover the content', async ({ page }) => {
@@ -124,7 +123,7 @@ test('collapsing to the icon rail widens the main content, and expanding restore
   expect(rail!.x + rail!.width).toBeLessThanOrEqual(after.x);
   // Active state is still shown on the rail.
   await navLink(page, 'Federal').click();
-  await expect(navLink(page, 'Federal')).toHaveAttribute('aria-current', 'location');
+  await expect(navLink(page, 'Federal')).toHaveAttribute('aria-current', 'page');
   await expect(navLink(page, 'Federal')).toBeVisible();
   await expand.click();
   const restored = await settledMainBox(page);
@@ -152,11 +151,11 @@ test('rail links show a tooltip on hover and on keyboard focus', async ({ page }
   await expect(tooltip).toHaveCount(0);
   await page.getByRole('button', { name: 'Expand navigation' }).focus();
   await page.keyboard.press('Tab');
-  await expect(navLink(page, 'Timeline')).toBeFocused();
-  await expect(tooltip).toHaveText('Timeline');
+  await expect(navLink(page, 'Overview')).toBeFocused();
+  await expect(tooltip).toHaveText('Overview');
   await page.keyboard.press('Tab');
-  await expect(tooltip).toHaveText('Costs');
-  const linkBox = await navLink(page, 'Costs').boundingBox();
+  await expect(tooltip).toHaveText('Income & Earnings');
+  const linkBox = await navLink(page, 'Income & Earnings').boundingBox();
   const tipBox = await tooltip.boundingBox();
   expect(tipBox!.x).toBeGreaterThanOrEqual(linkBox!.x + linkBox!.width - 1);
   await page.keyboard.press('Escape');
@@ -191,13 +190,13 @@ test('keyboard only: skip link first, then the toggle and links in order; Enter 
   await expect(page.getByRole('button', { name: 'Expand navigation' })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: 'Collapse navigation' })).toBeFocused();
-  for (const { label } of SECTIONS.slice(0, 3)) {
+  for (const { label } of SECTIONS.slice(0, SECTIONS.findIndex(item => item.id === 'loans') + 1)) {
     await page.keyboard.press('Tab');
     await expect(navLink(page, label)).toBeFocused();
   }
   await page.keyboard.press('Enter');
   await expect(page.locator('#loans-heading')).toBeFocused();
-  await expect(navLink(page, 'Loans')).toHaveAttribute('aria-current', 'location');
+  await expect(navLink(page, 'Loans')).toHaveAttribute('aria-current', 'page');
   // The next Tab continues inside the chosen section.
   await page.keyboard.press('Tab');
   expect(await page.evaluate(() => !!document.activeElement?.closest('#loans'))).toBe(true);
@@ -221,6 +220,7 @@ test('axe: no violations with the sidebar expanded and collapsed; no horizontal 
 });
 
 test('print hides the sidebar and the top bar', async ({ page }) => {
+  await navLink(page, 'Results').click();
   await page.emulateMedia({ media: 'print' });
   await expect(page.locator('#app-sidebar')).toBeHidden();
   await expect(page.locator('.shell-topbar')).toBeHidden();
@@ -259,8 +259,8 @@ test.describe('360 px drawer @narrow', () => {
     await expect(menu).toBeFocused();
   });
 
-  test('choosing a link closes the drawer, scrolls to the section and focuses its heading', async ({ page }) => {
-    for (const { id, label } of [SECTIONS[7], SECTIONS[2], SECTIONS[8]]) {
+  test('choosing a link closes the drawer, switches dashboard and focuses its heading', async ({ page }) => {
+    for (const { id, label } of SECTIONS.filter(item => ['results', 'loans', 'data'].includes(item.id))) {
       await page.getByRole('button', { name: 'Menu' }).click();
       await page.getByRole('dialog').getByRole('link', { name: label, exact: true }).click();
       await expect(page.getByRole('dialog')).toBeHidden();
@@ -271,10 +271,10 @@ test.describe('360 px drawer @narrow', () => {
       const headingTop = async () => (await page.locator(`#${id}-heading`).boundingBox())!.y;
       await expect.poll(headingTop, { message: `${id} heading settles below the top bar` }).toBeGreaterThanOrEqual(56);
       // The closed drawer is hidden, so check the link element directly.
-      await expect(page.locator(`#app-sidebar a[href="#${id}"]`)).toHaveAttribute('aria-current', 'location');
+      await expect(page.locator(`#app-sidebar a[href="#${id}"]`)).toHaveAttribute('aria-current', 'page');
     }
     await page.getByRole('button', { name: 'Menu' }).click();
-    await expect(navLink(page, 'Your data')).toHaveAttribute('aria-current', 'location');
+    await expect(navLink(page, 'Your data')).toHaveAttribute('aria-current', 'page');
   });
 
   test('keyboard only: skip link, Menu, trapped Tab inside the drawer', async ({ page }) => {
@@ -297,9 +297,7 @@ test.describe('360 px drawer @narrow', () => {
     }
     await page.keyboard.press('Tab');
     await expect(close).toBeFocused();
-    await page.keyboard.press('Tab');
-    await page.keyboard.press('Tab');
-    await page.keyboard.press('Tab');
+    for (let i = 0; i <= SECTIONS.findIndex(item => item.id === 'loans'); i += 1) await page.keyboard.press('Tab');
     await expect(navLink(page, 'Loans')).toBeFocused();
     await page.keyboard.press('Space');
     await expect(page.getByRole('dialog')).toBeVisible(); // Space does not activate links (native behavior)

@@ -8,6 +8,8 @@ import type { NavIconName } from './navItems';
 export type ShellIconName = NavIconName | 'menu' | 'close' | 'collapse' | 'expand';
 
 const PATHS: Record<ShellIconName, ReactNode> = {
+  overview: (<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>),
+  income: (<><path d="M3 19h18M5 15l5-5 4 3 6-8M15 5h5v5" /><path d="M6 3v4M4 5h4" /></>),
   timeline: (<><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4M7 14h4M7 17h7" /></>),
   costs: (<><path d="M2 9l10-5 10 5-10 5-10-5z" /><path d="M6 11v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5M22 9v6" /></>),
   loans: (<><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" /><path d="M6 10v4M18 10v4" /></>),

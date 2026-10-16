@@ -86,7 +86,11 @@ export function calculateProjection(plan: Plan, options: ProjectionOptions = {})
     const capitalized = loan.payInterestWhileInSchool || options.capitalizeInterestByLoan?.[loan.id] === false ? new D(0) : accrued;
     const balance = new D(loan.principal).plus(capitalized);
     const rate = new D(loan.annualRate).div(12);
-    const minimum = rate.isZero() ? balance.div(loan.termMonths) : balance.times(rate).div(new D(1).minus(new D(1).plus(rate).pow(-loan.termMonths)));
+    // The minimum amortizes everything owed at repayment start over the term: principal, capitalized
+    // interest and any accrued interest kept separate (uncapitalized). Excluding the separate interest
+    // would leave it unpaid at the end of the term, so "paying the minimum" would overrun the term.
+    const owedAtStart = balance.plus(accrued.minus(capitalized).minus(paid));
+    const minimum = rate.isZero() ? owedAtStart.div(loan.termMonths) : owedAtStart.times(rate).div(new D(1).minus(new D(1).plus(rate).pow(-loan.termMonths)));
     return { loanId: loan.id, originalPrincipal: money(loan.principal), accruedInterest: money(accrued), capitalizedInterest: money(capitalized), inSchoolInterestPaid: money(paid), balanceAtRepaymentStart: money(balance), minimumMonthlyPayment: money(minimum) };
   });
   // ---------------------------------------------------------------- Repayment loop

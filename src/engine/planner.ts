@@ -82,12 +82,30 @@ export function loanYearIndex(plan: PlannerPlan, loan: PlannerLoan): number {
   return attributedYearIndex(plan, loan.schoolYearId, loan.disbursementDate);
 }
 
-/** US-302: hourly jobs earn wage × hours × weeks; the unavailable share never counts as a resource. */
+/** US-302: gross annual value before the unavailable share: hourly jobs earn wage × hours × weeks,
+ * every other resource (and fixed-income jobs) uses `amount`. Rounded to cents. */
+export function resourceGrossValue(resource: Resource): Decimal {
+  return cents(resource.type === 'job' && resource.incomeMode === 'hourly'
+    ? new D(resource.hourlyWage).times(resource.hoursPerWeek).times(resource.weeksWorked)
+    : new D(resource.amount));
+}
+
+/** US-302: the amount that counts toward a year's resources; the unavailable share never counts. */
 export function resourceValue(resource: Resource): Decimal {
   const gross = resource.type === 'job' && resource.incomeMode === 'hourly'
     ? new D(resource.hourlyWage).times(resource.hoursPerWeek).times(resource.weeksWorked)
     : new D(resource.amount);
   return cents(gross.times(new D(1).minus(new D(resource.unavailablePercent).div(100))));
+}
+
+/**
+ * Base monthly debt budget before life events: monthlyDebtBudget + repayment.extraMonthlyPayment
+ * (the latter is a legacy field with no UI input; imported plans may carry it). Income events and
+ * windfalls change the per-month budget inside the projection; paymentShortfall compares minimums
+ * with this base value only.
+ */
+export function baseMonthlyBudget(plan: PlannerPlan): Decimal {
+  return new D(plan.postGradIncome.monthlyDebtBudget).plus(plan.repayment.extraMonthlyPayment);
 }
 
 function summarizeYear(plan: PlannerPlan, year: PlannerYear, index: number): YearSummary {
@@ -204,7 +222,7 @@ function budgetSchedule(plan: PlannerPlan, firstPaymentDate: string, horizon: nu
   const events = [...plan.lifeEvents].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const firstKey = monthKey(firstPaymentDate);
   const lastDate = addMonths(firstPaymentDate, horizon);
-  const base = new D(plan.postGradIncome.monthlyDebtBudget).plus(plan.repayment.extraMonthlyPayment);
+  const base = baseMonthlyBudget(plan);
 
   const incomeChanges: { key: string; delta: Decimal }[] = [];
   let salary = new D(plan.postGradIncome.annualSalary);
@@ -369,7 +387,7 @@ export function calculatePlannerOutputs(plan: PlannerPlan): Result<PlannerOutput
     }
     const repayment = base.value;
     const minimumTotal = sum(repayment.loans.map(loan => loan.minimumMonthlyPayment));
-    const budget = new D(plan.postGradIncome.monthlyDebtBudget).plus(plan.repayment.extraMonthlyPayment);
+    const budget = baseMonthlyBudget(plan);
     if (plan.lifeEvents.some(event => event.type === 'windfall' && monthKey(event.date) < monthKey(repayment.firstPaymentDate))) {
       notices.push('Windfalls dated before repayment starts are assumed to be saved and applied in the first repayment month.');
     }

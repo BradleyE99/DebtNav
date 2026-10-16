@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { PlannerDocument, PlannerPlan, PlannerStore, StorageLike } from '../../engine/planner-contracts';
 import { createDefaultPlan } from '../../engine/planner';
 import { exportDocument } from '../../data/storage';
@@ -49,6 +49,15 @@ export function renderPlanner(options: { plan?: PlannerPlan; disclaimerDismissed
     handle.store = store;
     return <PlannerApp store={store} />;
   }
+  window.scrollTo = () => {};
   const view = render(<Harness />);
   return { ...view, storage, plan: () => handle.store!.document.plan, store: () => handle.store! };
+}
+
+/** Select a dashboard through the same link used by users. */
+export function navigateTo(id: string, openEditors = false) {
+  const link = document.querySelector<HTMLAnchorElement>(`nav a[href="#${id}"]`);
+  if (!link) throw new Error(`No dashboard link for ${id}`);
+  fireEvent.click(link);
+  if (openEditors) for (const detail of screen.getByRole('main').querySelectorAll('details')) detail.open = true;
 }
