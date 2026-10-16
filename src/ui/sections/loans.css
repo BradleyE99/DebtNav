@@ -90,3 +90,9 @@
   .loan-card__attention { padding: 6px 12px 8px; }
   .loan-card__details { padding: 4px 10px 12px; }
 }
+
+/* Academic year selector: "Add another academic year…" opens a small inline form below the select. */
+.loan-academic-year { min-width: 0; }
+.loan-academic-year__add { margin-top: 10px; padding: 12px; background: var(--canvas); border: 1px dashed var(--line-strong); border-radius: 8px; }
+.loan-academic-year__add input { max-width: 8rem; }
+.loan-academic-year__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }

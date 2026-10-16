@@ -15,7 +15,9 @@ import { LOAN_TYPE_LABELS, formatCurrency, plural } from '../format';
 import { errorsForLoan, fieldIdForPath, updateLoan } from '../planUpdates';
 import { onRevealRequest } from '../reveal';
 import { newId } from '../ids';
-import { groupLoansByYear, loanYearKey, useLoanGroupingPreference } from './loanYearGroups';
+import { academicYearOptions, groupLoansByAcademicYear, loanYearKey, useLoanGroupingPreference } from './loanYearGroups';
+import { loanAcademicYear } from '../../engine/planner';
+import { UNASSIGNED_ACADEMIC_YEAR, academicYearFromStart, formatAcademicYear } from '../../engine/academicYear';
 import './loans.css';
 
 const loanTypeOptions = Object.entries(LOAN_TYPE_LABELS) as [LoanType, string][];
@@ -52,15 +54,15 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
   // A loan added here that should receive focus once it has opened.
   const pendingFocusRef = useRef<string | null>(null);
 
-  // Optional grouping by disbursement year (presentation only; remembered on this device).
+  // Optional grouping by academic year (presentation only; remembered on this device).
   const [groupByYear, setGroupByYear] = useLoanGroupingPreference();
   // Year sections the user collapsed. UI-only state; year sections start open.
   const [collapsedYears, setCollapsedYears] = useState<ReadonlySet<string>>(() => new Set());
-  // Each loan's year as of the last render, to spot loans that are new or moved to another year.
-  const yearSignature = plan.loans.map(loan => `${loan.id}:${loanYearKey(loan)}`).join('|');
+  // Each loan's academic year as of the last render, to spot loans that are new or moved to another year.
+  const yearSignature = plan.loans.map(loan => `${loan.id}:${loanYearKey(plan, loan)}`).join('|');
   const [seenYears, setSeenYears] = useState(yearSignature);
-  const loansRef = useRef(plan.loans);
-  useEffect(() => { loansRef.current = plan.loans; });
+  const planRef = useRef(plan);
+  useEffect(() => { planRef.current = plan; });
 
   // Drop ids of loans that no longer exist (adjusting state during render, without an extra effect pass).
   const loanIds = new Set(plan.loans.map(loan => loan.id));
@@ -73,21 +75,21 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
     setExpanded(withOpen(expanded, focusLoanId, true));
   }
 
-  // A new loan, or an open loan whose new date moved it, opens its year section so it stays in view.
+  // A new loan, or an open loan reassigned to another academic year, opens its year section so it stays in view.
   if (yearSignature !== seenYears) {
     const before = new Map(seenYears ? seenYears.split('|').map(entry => entry.split(':') as [string, string]) : []);
     const reveal = plan.loans
-      .filter(loan => before.get(loan.id) !== loanYearKey(loan) && (!before.has(loan.id) || expanded.has(loan.id)))
-      .map(loanYearKey);
+      .filter(loan => before.get(loan.id) !== loanYearKey(plan, loan) && (!before.has(loan.id) || expanded.has(loan.id)))
+      .map(loan => loanYearKey(plan, loan));
     setSeenYears(yearSignature);
     if (reveal.some(key => collapsedYears.has(key))) setCollapsedYears(new Set([...collapsedYears].filter(key => !reveal.includes(key))));
   }
   if (focusLoanId && loanIds.has(focusLoanId)) {
-    const key = loanYearKey(plan.loans.find(loan => loan.id === focusLoanId)!);
+    const key = loanYearKey(plan, plan.loans.find(loan => loan.id === focusLoanId)!);
     if (collapsedYears.has(key)) setCollapsedYears(withOpen(collapsedYears, key, false));
   }
 
-  // A loan whose new date moves it to another year section is remounted there; keep focus on the field being edited.
+  // A loan reassigned to another year section is remounted there; keep focus on the field being edited.
   const sectionRef = useRef<HTMLElement>(null);
   const lastFocusedRef = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -111,28 +113,34 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
   useEffect(() => onRevealRequest(fieldId => {
     const loanId = loanIdFromFieldId(fieldId);
     if (!loanId) return;
-    const loan = loansRef.current.find(item => item.id === loanId);
+    const current = planRef.current;
+    const loan = current.loans.find(item => item.id === loanId);
     flushSync(() => {
-      setExpanded(current => withOpen(current, loanId, true));
-      if (loan) setCollapsedYears(current => withOpen(current, loanYearKey(loan), false));
+      setExpanded(ids => withOpen(ids, loanId, true));
+      if (loan) setCollapsedYears(keys => withOpen(keys, loanYearKey(current, loan), false));
     });
   }), []);
 
   function addLoan() {
     const id = newId();
-    update(p => ({
-      ...p,
-      loans: [...p.loans, {
+    update(p => {
+      const loan: PlannerLoan = {
         id, name: `Loan ${p.loans.length + 1}`, type: 'unsubsidized', principal: '0.00', annualRate: federalReference.interestRates.undergraduateDirect.rate,
         disbursementDate: p.settings.startDate, termMonths: 120, payInterestWhileInSchool: false, capitalizeInterest: true,
-      }],
-      repayment: { ...p.repayment, customOrder: [...p.repayment.customOrder, id] },
-    }));
+      };
+      // Starts in the school year its default date falls in (shown in the open card, where it can be changed).
+      loan.academicYear = loanAcademicYear(p, loan) ?? UNASSIGNED_ACADEMIC_YEAR;
+      return {
+        ...p,
+        loans: [...p.loans, loan],
+        repayment: { ...p.repayment, customOrder: [...p.repayment.customOrder, id] },
+      };
+    });
     pendingFocusRef.current = id;
     setExpanded(current => withOpen(current, id, true));
   }
 
-  const groups = groupByYear ? groupLoansByYear(plan.loans) : [];
+  const groups = groupByYear ? groupLoansByAcademicYear(plan) : [];
   const allExpanded = plan.loans.length > 0 && plan.loans.every(loan => expanded.has(loan.id)) && groups.every(group => !collapsedYears.has(group.key));
   const noneExpanded = plan.loans.every(loan => !expanded.has(loan.id));
   const card = (loan: PlannerLoan, index: number) => (
@@ -154,7 +162,7 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
         <div className="loan-list-toolbar">
           <div className="field-check loan-list-grouping">
             <input id="loans-group-by-year" type="checkbox" checked={groupByYear} onChange={event => setGroupByYear(event.target.checked)} />
-            <label htmlFor="loans-group-by-year">Group by year</label>
+            <label htmlFor="loans-group-by-year">Group by academic year</label>
           </div>
           <div className="loan-list-controls" role="group" aria-label="Show or hide loan details">
             <button type="button" className="loan-list-control" aria-disabled={allExpanded || undefined}
@@ -229,6 +237,7 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
   const atRepayment = projection?.repayment?.loans.find(item => item.loanId === loan.id);
   const accrues = loan.type === 'unsubsidized' || ((loan.type === 'private' || loan.type === 'other') && loan.accruesInterestInSchool !== false);
   const inSchool = inSchoolCost(loan, projection?.repayment?.inSchoolInterestPayments ?? null);
+  const academicYear = loanAcademicYear(plan, loan);
   // Inside a year section the card heading sits one level below the year's heading.
   const Heading = nested ? 'h4' : 'h3';
 
@@ -252,6 +261,7 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
           <span className="loan-card__summary">
             <span className="loan-card__figure"><span className="loan-card__label">Principal</span> <span className="loan-card__value">{formatCurrency(loan.principal)}</span></span>
             <span className="loan-card__figure"><span className="loan-card__label">Annual rate</span> <span className="loan-card__value">{formatRatePercent(loan.annualRate)}%</span></span>
+            <span className="loan-card__figure"><span className="loan-card__label">Academic year</span> <span className="loan-card__value">{academicYear ? formatAcademicYear(academicYear) : 'Unassigned'}</span></span>
             {atRepayment && (
               <span className="loan-card__figure"><span className="loan-card__label">Balance at repayment</span> <span className="loan-card__value">{formatCurrency(atRepayment.balanceAtRepaymentStart)}</span></span>
             )}
@@ -284,6 +294,7 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
             <SelectField id={`${base}.type`} label="Loan type" options={loanTypeOptions} value={loan.type} onCommit={type => patch({ type })} />
             <MoneyField id={`${base}.principal`} label="Amount borrowed (principal)" value={loan.principal} onCommit={principal => patch({ principal })} />
             <RateField id={`${base}.annualRate`} label="Annual interest rate" hint="0–30%." value={loan.annualRate} onCommit={annualRate => patch({ annualRate })} />
+            <AcademicYearField loan={loan} academicYear={academicYear} onCommit={value => patch({ academicYear: value })} />
             <DateField id={`${base}.disbursementDate`} label="Disbursement date" value={loan.disbursementDate}
               externalError={loanErrors.find(error => fieldIdForPath(plan, error.path) === `${base}.disbursementDate`)?.message} onCommit={disbursementDate => patch({ disbursementDate })} />
             <IntegerField id={`${base}.termMonths`} label="Repayment term (months)" hint="120 months = 10 years." min={1} max={1200} value={loan.termMonths} onCommit={termMonths => patch({ termMonths })} />
@@ -330,6 +341,75 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
         </FieldStatusProvider>
       </div>
     </article>
+  );
+}
+
+const ADD_ACADEMIC_YEAR = '__add__';
+
+/** The range named by a typed first year ('2025' → '2025-2026'), or null. */
+function rangeFromText(text: string): string | null {
+  const value = text.trim();
+  return /^\d{4}$/.test(value) ? academicYearFromStart(Number(value)) : null;
+}
+
+/**
+ * Which academic year a loan pays for: the plan's school years, ranges other loans use, Unassigned, or a
+ * new range typed by its first year. Only the assignment changes; dates and amounts are left alone.
+ */
+function AcademicYearField({ loan, academicYear, onCommit }: { loan: PlannerLoan; academicYear: string | null; onCommit(value: string): void }) {
+  const { plan } = usePlanner();
+  const id = `loans.${loan.id}.academicYear`;
+  const startId = `${id}-start`;
+  const [adding, setAdding] = useState(false);
+  const [startText, setStartText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const options: [string, string][] = [...academicYearOptions(plan), [ADD_ACADEMIC_YEAR, 'Add another academic year…']];
+  const typed = rangeFromText(startText);
+
+  function add() {
+    if (!typed) { setError('Enter the year the academic year starts, from 1900 to 2198 (for example 2025).'); return; }
+    onCommit(typed);
+    setAdding(false);
+    setStartText('');
+    setError(null);
+    requestAnimationFrame(() => document.getElementById(id)?.focus());
+  }
+  function cancel() {
+    setAdding(false);
+    setError(null);
+    document.getElementById(id)?.focus();
+  }
+
+  return (
+    <div className="loan-academic-year">
+      <SelectField id={id} label="Academic year" hint="The school year this loan pays for. It does not change the disbursement date or interest."
+        options={options} value={academicYear ?? UNASSIGNED_ACADEMIC_YEAR}
+        onCommit={value => {
+          if (value !== ADD_ACADEMIC_YEAR) { onCommit(value); return; }
+          setAdding(true);
+          requestAnimationFrame(() => document.getElementById(startId)?.focus());
+        }} />
+      {adding && (
+        <div className="loan-academic-year__add" role="group" aria-labelledby={`${startId}-label`}>
+          <div className="field">
+            <label id={`${startId}-label`} htmlFor={startId}>First year of the new academic year</label>
+            <p id={`${startId}-hint`} className="field-hint">{typed ? `Adds ${formatAcademicYear(typed)}.` : 'For example, 2025 adds 2025–2026.'}</p>
+            <input id={startId} type="text" inputMode="numeric" autoComplete="off" maxLength={4} value={startText}
+              aria-invalid={error ? true : undefined} aria-describedby={`${startId}-hint${error ? ` ${startId}-error` : ''}`}
+              onChange={event => { setStartText(event.target.value); setError(null); }}
+              onKeyDown={event => {
+                if (event.key === 'Enter') { event.preventDefault(); add(); }
+                if (event.key === 'Escape') { event.preventDefault(); cancel(); }
+              }} />
+            {error && <p id={`${startId}-error`} className="field-error">{error}</p>}
+          </div>
+          <div className="loan-academic-year__actions">
+            <button type="button" onClick={add}>Add academic year</button>
+            <button type="button" onClick={cancel}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

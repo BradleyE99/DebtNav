@@ -1,10 +1,11 @@
 import { useCallback, useState } from 'react';
-import type { PlannerLoan } from '../../engine/planner-contracts';
+import type { PlannerLoan, PlannerPlan } from '../../engine/planner-contracts';
 import { money, sum } from '../../engine/money';
-import { parseDateInput } from '../../data/parse';
+import { loanAcademicYear } from '../../engine/planner';
+import { UNASSIGNED_ACADEMIC_YEAR, academicYearOfSchoolYear, formatAcademicYear } from '../../engine/academicYear';
 
 /**
- * UI preference only (not plan data): whether the Loans page groups loans by disbursement year on this device.
+ * UI preference only (not plan data): whether the Loans page groups loans by academic year on this device.
  * Like the sidebar preference, it is not a plan key, so "Delete all my data" leaves it alone.
  */
 export const LOAN_GROUPING_PREFERENCE_KEY = 'debtnav.ui.loansGroupByYear';
@@ -35,13 +36,12 @@ export function useLoanGroupingPreference(): [groupByYear: boolean, setGroupByYe
   return [groupByYear, setGroupByYear];
 }
 
-/** Key of the section for loans without a valid disbursement date. */
+/** Key of the section for loans without an academic year. */
 export const UNASSIGNED_YEAR = 'unassigned';
 
-/** Group key for a loan: its disbursement date's calendar year ('2026'), or UNASSIGNED_YEAR. */
-export function loanYearKey(loan: Pick<PlannerLoan, 'disbursementDate'>): string {
-  const date = loan.disbursementDate;
-  return typeof date === 'string' && parseDateInput(date).ok ? date.slice(0, 4) : UNASSIGNED_YEAR;
+/** Group key for a loan: its academic year ('2026-2027'), or UNASSIGNED_YEAR. */
+export function loanYearKey(plan: PlannerPlan, loan: PlannerLoan): string {
+  return loanAcademicYear(plan, loan) ?? UNASSIGNED_YEAR;
 }
 
 export interface LoanYearGroup {
@@ -54,13 +54,13 @@ export interface LoanYearGroup {
 }
 
 /**
- * Presentation-only grouping: years in chronological order, loans within a year by disbursement date
- * (ties keep plan order), and loans without a valid date last under "Unassigned year".
+ * Presentation-only grouping by each loan's assigned academic year: years in chronological order,
+ * loans within a year by disbursement date (ties keep plan order), and unassigned loans last.
  */
-export function groupLoansByYear(loans: readonly PlannerLoan[]): LoanYearGroup[] {
+export function groupLoansByAcademicYear(plan: PlannerPlan): LoanYearGroup[] {
   const byKey = new Map<string, { loan: PlannerLoan; index: number }[]>();
-  loans.forEach((loan, index) => {
-    const key = loanYearKey(loan);
+  plan.loans.forEach((loan, index) => {
+    const key = loanYearKey(plan, loan);
     const list = byKey.get(key) ?? [];
     list.push({ loan, index });
     byKey.set(key, list);
@@ -69,16 +69,30 @@ export function groupLoansByYear(loans: readonly PlannerLoan[]): LoanYearGroup[]
   if (byKey.has(UNASSIGNED_YEAR)) keys.push(UNASSIGNED_YEAR);
   return keys.map(key => {
     const entries = byKey.get(key)!;
-    if (key !== UNASSIGNED_YEAR) {
-      entries.sort((a, b) => (a.loan.disbursementDate < b.loan.disbursementDate ? -1 : a.loan.disbursementDate > b.loan.disbursementDate ? 1 : a.index - b.index));
-    }
+    entries.sort((a, b) => (a.loan.disbursementDate < b.loan.disbursementDate ? -1 : a.loan.disbursementDate > b.loan.disbursementDate ? 1 : a.index - b.index));
     return {
       key,
-      label: key === UNASSIGNED_YEAR ? 'Unassigned year' : key,
+      label: key === UNASSIGNED_YEAR ? 'Unassigned' : formatAcademicYear(key),
       loans: entries,
       totalPrincipal: totalPrincipal(entries.map(entry => entry.loan)),
     };
   });
+}
+
+/**
+ * Selector options for a loan's academic year: the plan's school years and any other ranges loans use,
+ * in chronological order, then Unassigned.
+ */
+export function academicYearOptions(plan: PlannerPlan): [string, string][] {
+  const ranges = new Set(plan.schoolYears.map(academicYearOfSchoolYear));
+  for (const loan of plan.loans) {
+    const academicYear = loanAcademicYear(plan, loan);
+    if (academicYear) ranges.add(academicYear);
+  }
+  return [
+    ...[...ranges].sort().map(range => [range, formatAcademicYear(range)] as [string, string]),
+    [UNASSIGNED_ACADEMIC_YEAR, 'Unassigned'],
+  ];
 }
 
 function totalPrincipal(loans: readonly PlannerLoan[]): string {

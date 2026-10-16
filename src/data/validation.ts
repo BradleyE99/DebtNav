@@ -14,6 +14,7 @@
 import { D } from '../engine/money';
 import { addMonths, validDate } from '../engine/dates';
 import { applyScenario } from '../engine/planner';
+import { UNASSIGNED_ACADEMIC_YEAR, isAcademicYear } from '../engine/academicYear';
 import { isResolvablePath, overridablePaths } from '../engine/paths';
 import { listStrategies } from '../engine/strategies/registry';
 import type { FieldError, PlannerDocument, PlannerPlan, Result } from '../engine/planner-contracts';
@@ -292,6 +293,9 @@ function validateLoans(plan: Obj, check: Checker, yearIds: Set<string>): Set<str
     if (loan.schoolYearId !== undefined && (typeof loan.schoolYearId !== 'string' || !yearIds.has(loan.schoolYearId))) {
       check.fail(`${path}.schoolYearId`, 'OUT_OF_RANGE', 'This loan points to a school year that no longer exists.');
     }
+    if (loan.academicYear !== undefined && loan.academicYear !== UNASSIGNED_ACADEMIC_YEAR && !isAcademicYear(loan.academicYear)) {
+      check.fail(`${path}.academicYear`, 'OUT_OF_RANGE', 'Choose an academic year such as 2026–2027, or Unassigned.');
+    }
   }
   return ids;
 }
@@ -542,7 +546,7 @@ export function toPersistedPlan(plan: PlannerPlan): PlannerPlan {
     })),
     loans: plan.loans.map(loan => pick(loan, [
       'id', 'name', 'type', 'principal', 'annualRate', 'disbursementDate', 'termMonths', 'payInterestWhileInSchool',
-      'accruesInterestInSchool', 'monthlyPayment', 'schoolYearId', 'gapAtCreation', 'capitalizeInterest',
+      'accruesInterestInSchool', 'monthlyPayment', 'schoolYearId', 'academicYear', 'gapAtCreation', 'capitalizeInterest',
     ])),
     repayment: {
       ...pick(plan.repayment, ['strategyId', 'extraMonthlyPayment', 'maxMonths', 'mode', 'federalPlan', 'familySize', 'annualAGI']),

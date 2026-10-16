@@ -57,7 +57,7 @@ describe('autosave and reload (US-1001)', () => {
     act(() => {
       first.result.current.updatePlan(plan => ({
         ...plan,
-        loans: [{ id: 'l1', name: 'Loan', type: 'subsidized', principal: '3500.00', annualRate: '0.0553', disbursementDate: plan.settings.startDate, termMonths: 120, schoolYearId: plan.schoolYears[0].id }],
+        loans: [{ id: 'l1', name: 'Loan', type: 'subsidized', principal: '3500.00', annualRate: '0.0553', disbursementDate: plan.settings.startDate, termMonths: 120, schoolYearId: plan.schoolYears[0].id, academicYear: '2026-2027' }],
         scenarios: [{ id: 's1', name: 'Faster', overrides: { 'repayment.extraMonthlyPayment': '100.00' } }],
       }));
       first.result.current.dismissDisclaimer();

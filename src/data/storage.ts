@@ -6,7 +6,7 @@ import { SCHEMA_VERSION } from '../engine/planner-contracts';
 import type { LoadResult, PlannerDocument, Result, SavedEnvelope, SaveResult, StorageLike } from '../engine/planner-contracts';
 import { pruneDanglingReferences } from '../engine/paths';
 import type { PlannerPlan } from '../engine/planner-contracts';
-import { applyScenario } from '../engine/planner';
+import { applyScenario, assignLegacyAcademicYears } from '../engine/planner';
 import { isDisbursementError, isPlainObject, repaymentStartDate, validateDocument } from './validation';
 
 export const STORAGE_KEY = 'debtnav.plan';
@@ -177,7 +177,9 @@ function parseImport(text: string): Result<PlannerDocument> | DetailedImport {
       const first = result.errors[0];
       return importError(`The plan in this file is not valid (${first.path}: ${first.message}) Your current plan was not changed.`);
     }
-    return { result, repairs };
+    // Loans saved before academic years existed keep the school year they already counted toward.
+    const plan = assignLegacyAcademicYears(result.value.plan);
+    return { result: plan === result.value.plan ? result : { ok: true, value: { ...result.value, plan } }, repairs };
   } catch {
     return importError('The file could not be read. Your current plan was not changed.');
   }

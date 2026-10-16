@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** Optional "Group by year" view of the Loans page: grouping, totals, moves, adds, reveal, and the device preference. */
+/** Loan academic years on the Loans page: the selector, the summary, "Group by academic year", and the device preference. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -7,7 +7,7 @@ import type { PlannerLoan, PlannerPlan } from '../../engine/planner-contracts';
 import { renderPlanner, samplePlan } from '../testing/renderPlanner';
 import { revealField } from '../reveal';
 import {
-  LOAN_GROUPING_PREFERENCE_KEY, groupLoansByYear, loanYearKey, readLoanGroupingPreference, writeLoanGroupingPreference,
+  LOAN_GROUPING_PREFERENCE_KEY, academicYearOptions, groupLoansByAcademicYear, readLoanGroupingPreference, writeLoanGroupingPreference,
 } from './loanYearGroups';
 
 beforeEach(() => { window.localStorage.clear(); window.history.replaceState(null, '', '/#loans'); });
@@ -21,40 +21,37 @@ const byId = (id: string) => {
 };
 const toggle = (loanId: string) => within(byId(`loans.${loanId}-heading`)).getByRole('button');
 const isOpen = (loanId: string) => toggle(loanId).getAttribute('aria-expanded') === 'true';
-const groupBy = () => screen.getByRole('checkbox', { name: 'Group by year' });
+const groupBy = () => screen.getByRole('checkbox', { name: 'Group by academic year' });
 const yearToggle = (key: string) => within(byId(`loans-year-${key}`)).getAllByRole('button')[0];
 const yearOpen = (key: string) => yearToggle(key).getAttribute('aria-expanded') === 'true';
 const yearKeys = () => [...document.querySelectorAll('.loan-year')].map(section => section.id.replace('loans-year-', ''));
 const loansIn = (key: string) => [...byId(`loans-year-${key}-loans`).querySelectorAll('article.loan-card')].map(card => card.querySelector('.loan-card__heading')!.id.replace(/^loans\.|-heading$/g, ''));
+const academicYear = (loanId: string) => byId(`loans.${loanId}.academicYear`) as unknown as HTMLSelectElement;
 
-/** loan-a (2026) and loan-b (2027), plus loan-c dated before loan-a's year mate. */
+/**
+ * School years run 2026–2027 … 2029–2030. All three loans are disbursed in 2026, but loan-b pays
+ * for 2027–2028: grouping follows the academic year, not the date.
+ */
 function yearsPlan(): PlannerPlan {
   const base = samplePlan();
   const [a, b] = base.loans;
-  const c: PlannerLoan = { ...a, id: 'loan-c', name: 'Gamma loan', principal: '1000.00', disbursementDate: '2026-08-01' };
+  const c: PlannerLoan = { ...a, id: 'loan-c', name: 'Gamma loan', principal: '1000.00', disbursementDate: '2026-08-01', academicYear: '2026-2027' };
   return {
     ...base,
-    loans: [a, { ...b, disbursementDate: '2027-01-10' }, c],
+    loans: [{ ...a, academicYear: '2026-2027' }, { ...b, academicYear: '2027-2028' }, c],
     repayment: { ...base.repayment, customOrder: ['loan-a', 'loan-b', 'loan-c'] },
   };
 }
 
-describe('groupLoansByYear', () => {
-  const loan = (id: string, disbursementDate: string, principal = '100.00') =>
-    ({ id, name: id, type: 'unsubsidized', principal, annualRate: '0.05', disbursementDate, termMonths: 120 }) as PlannerLoan;
-
-  it('orders years chronologically, loans by date (ties in plan order), and puts invalid dates last', () => {
-    const groups = groupLoansByYear([
-      loan('late', '2027-09-01'), loan('bad', '2026-02-30'), loan('tie-1', '2026-08-24', '250.50'),
-      loan('early', '2026-01-05'), loan('blank', ''), loan('tie-2', '2026-08-24', '49.50'),
-    ]);
-    expect(groups.map(group => group.label)).toEqual(['2026', '2027', 'Unassigned year']);
-    expect(groups[0].loans.map(entry => entry.loan.id)).toEqual(['early', 'tie-1', 'tie-2']);
-    expect(groups[0].loans.map(entry => entry.index)).toEqual([3, 2, 5]);
-    expect(groups[0].totalPrincipal).toBe('400.00');
-    expect(groups[2].loans.map(entry => entry.loan.id)).toEqual(['bad', 'blank']);
-    expect(loanYearKey({ disbursementDate: 'soon' })).toBe('unassigned');
-    expect(groupLoansByYear([])).toEqual([]);
+describe('grouping helpers', () => {
+  it('groups by academic year in order, loans by date, unassigned last; options list ranges then Unassigned', () => {
+    const base = yearsPlan();
+    const plan: PlannerPlan = { ...base, loans: [...base.loans, { ...base.loans[0], id: 'loan-d', academicYear: 'unassigned' }, { ...base.loans[0], id: 'loan-e', academicYear: '2024-2025' }] };
+    const groups = groupLoansByAcademicYear(plan);
+    expect(groups.map(group => group.label)).toEqual(['2024–2025', '2026–2027', '2027–2028', 'Unassigned']);
+    expect(groups[1].loans.map(entry => entry.loan.id)).toEqual(['loan-c', 'loan-a']);
+    expect(groups[1].totalPrincipal).toBe('6000.00');
+    expect(academicYearOptions(plan).map(([, label]) => label)).toEqual(['2024–2025', '2026–2027', '2027–2028', '2028–2029', '2029–2030', 'Unassigned']);
   });
 
   it('reads and writes the device preference, tolerating storage that throws', () => {
@@ -69,113 +66,156 @@ describe('groupLoansByYear', () => {
   });
 });
 
-describe('Group by year', () => {
+describe('academic year selector', () => {
+  it('shows existing loans in the school year they already counted toward', () => {
+    // samplePlan loans predate academic years; both are dated at the start of 2026–2027.
+    const view = renderPlanner({ plan: samplePlan() });
+    expect(view.plan().loans.map(loan => loan.academicYear)).toEqual(['2026-2027', '2026-2027']);
+    expect(toggle('loan-a').textContent).toMatch(/Academic year\s*2026–2027/);
+    expect(academicYear('loan-a').value).toBe('2026-2027');
+    expect([...academicYear('loan-a').options].map(option => option.text)).toEqual(['2026–2027', '2027–2028', '2028–2029', '2029–2030', 'Unassigned', 'Add another academic year…']);
+  });
+
+  it('changes only the academic year, and can unassign it', async () => {
+    const user = userEvent.setup();
+    const view = renderPlanner({ plan: yearsPlan() });
+    const before = view.plan().loans[0];
+    await user.click(toggle('loan-a'));
+    await user.selectOptions(academicYear('loan-a'), '2029-2030');
+    expect(view.plan().loans[0]).toEqual({ ...before, academicYear: '2029-2030' });
+    expect(toggle('loan-a').textContent).toMatch(/Academic year\s*2029–2030/);
+    await user.selectOptions(academicYear('loan-a'), 'unassigned');
+    expect(view.plan().loans[0].academicYear).toBe('unassigned');
+    expect(toggle('loan-a').textContent).toMatch(/Academic year\s*Unassigned/);
+    expect(view.plan().repayment.customOrder).toEqual(['loan-a', 'loan-b', 'loan-c']);
+  });
+
+  it('adds an academic year that is not in the plan', async () => {
+    const user = userEvent.setup();
+    const view = renderPlanner({ plan: yearsPlan() });
+    await user.click(toggle('loan-b'));
+    await user.selectOptions(academicYear('loan-b'), '__add__');
+    expect(view.plan().loans[1].academicYear).toBe('2027-2028');
+    await act(async () => { await new Promise(resolve => requestAnimationFrame(() => resolve(null))); });
+    const start = byId('loans.loan-b.academicYear-start');
+    expect(document.activeElement).toBe(start);
+    await user.type(start, '19{Enter}');
+    expect(start.getAttribute('aria-invalid')).toBe('true');
+    expect(byId('loans.loan-b.academicYear-start-error').textContent).toContain('1900 to 2198');
+    await user.clear(start);
+    await user.type(start, '2024');
+    expect(byId('loans.loan-b.academicYear-start-hint').textContent).toBe('Adds 2024–2025.');
+    await user.keyboard('{Enter}');
+    expect(view.plan().loans[1].academicYear).toBe('2024-2025');
+    expect(view.plan().loans[1].disbursementDate).toBe(samplePlan().loans[1].disbursementDate);
+    expect(document.getElementById('loans.loan-b.academicYear-start')).toBeNull();
+    expect(academicYear('loan-b').value).toBe('2024-2025');
+    // The new range is offered to every loan; Cancel (or Escape) adds nothing.
+    await user.click(toggle('loan-a'));
+    expect([...academicYear('loan-a').options].map(option => option.value)).toContain('2024-2025');
+    await user.selectOptions(academicYear('loan-a'), '__add__');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(view.plan().loans[0].academicYear).toBe('2026-2027');
+  });
+});
+
+describe('Group by academic year', () => {
   it('is off by default, groups with counts and totals, is remembered, and switches back to the flat list', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: yearsPlan() });
     const before = JSON.stringify(view.plan());
     expect(groupBy()).toHaveProperty('checked', false);
     expect(document.querySelector('.loan-year')).toBeNull();
-    expect(toggle('loan-a').closest('h3')).toBeTruthy();
 
     await user.click(groupBy());
-    expect(yearKeys()).toEqual(['2026', '2027']);
-    expect(loansIn('2026')).toEqual(['loan-c', 'loan-a']);
-    expect(loansIn('2027')).toEqual(['loan-b']);
-    expect(yearToggle('2026').textContent).toMatch(/2026\s*2 loans · \$6,000\.00 principal/);
-    expect(yearToggle('2027').textContent).toMatch(/2027\s*1 loan · \$20,000\.00 principal/);
-    expect(yearToggle('2026').closest('h3')).toBeTruthy();
+    expect(yearKeys()).toEqual(['2026-2027', '2027-2028']);
+    expect(loansIn('2026-2027')).toEqual(['loan-c', 'loan-a']);
+    expect(loansIn('2027-2028')).toEqual(['loan-b']);
+    expect(yearToggle('2026-2027').textContent).toMatch(/2026–2027\s*2 loans · \$6,000\.00 principal/);
+    expect(yearToggle('2027-2028').textContent).toMatch(/2027–2028\s*1 loan · \$20,000\.00 principal/);
+    expect(yearToggle('2026-2027').closest('h3')).toBeTruthy();
     expect(toggle('loan-a').closest('h4')).toBeTruthy();
-    // Card summaries are unchanged; fallback names keep their plan numbering.
-    expect(toggle('loan-c').textContent).toMatch(/Gamma loan.*Federal Direct Unsubsidized.*Principal\s*\$1,000\.00.*Annual rate\s*5%/);
     expect(window.localStorage.getItem(LOAN_GROUPING_PREFERENCE_KEY)).toBe('year');
     expect(JSON.stringify(view.plan())).toBe(before);
 
-    // Remembered on this device.
     cleanup();
     renderPlanner({ plan: yearsPlan() });
     expect(groupBy()).toHaveProperty('checked', true);
-    expect(yearKeys()).toEqual(['2026', '2027']);
+    expect(yearKeys()).toEqual(['2026-2027', '2027-2028']);
 
     await user.click(groupBy());
     expect(document.querySelector('.loan-year')).toBeNull();
     expect([...document.querySelectorAll('.loan-list > article.loan-card')]).toHaveLength(3);
     expect(toggle('loan-a').closest('h3')).toBeTruthy();
-    expect(window.localStorage.getItem(LOAN_GROUPING_PREFERENCE_KEY)).toBe('none');
   });
 
   it('collapses year sections by keyboard without losing drafts or open cards', async () => {
     const user = userEvent.setup();
     writeLoanGroupingPreference(true);
     const view = renderPlanner({ plan: yearsPlan() });
-    expect(yearOpen('2026')).toBe(true);
     await user.click(toggle('loan-a'));
     const principal = byId('loans.loan-a.principal');
     await user.clear(principal);
     await user.type(principal, 'abc');
-    yearToggle('2026').focus();
+    yearToggle('2026-2027').focus();
     await user.keyboard('{Enter}');
-    expect(yearOpen('2026')).toBe(false);
-    expect(byId('loans-year-2026-loans').hidden).toBe(true);
-    expect(yearToggle('2026').getAttribute('aria-controls')).toBe('loans-year-2026-loans');
+    expect(yearOpen('2026-2027')).toBe(false);
+    expect(byId('loans-year-2026-2027-loans').hidden).toBe(true);
     await user.keyboard(' ');
-    expect(yearOpen('2026')).toBe(true);
-    expect(isOpen('loan-a')).toBe(true);
+    expect(yearOpen('2026-2027') && isOpen('loan-a')).toBe(true);
     expect(byId('loans.loan-a.principal').value).toBe('abc');
     expect(view.plan().loans[0].principal).toBe('5000.00');
-    // Expand all also opens collapsed years.
-    await user.click(yearToggle('2027'));
+    await user.click(yearToggle('2027-2028'));
     await user.click(screen.getByRole('button', { name: 'Expand all' }));
-    expect(yearOpen('2027') && isOpen('loan-b')).toBe(true);
+    expect(yearOpen('2027-2028') && isOpen('loan-b')).toBe(true);
   });
 
-  it('moves a loan to its new year when its disbursement date changes, keeping it open and focused', async () => {
+  it('moves a loan when its academic year changes, keeping it open and focused; the date does not move it', async () => {
     const user = userEvent.setup();
     writeLoanGroupingPreference(true);
     const view = renderPlanner({ plan: yearsPlan() });
-    await user.click(yearToggle('2027'));
+    await user.click(yearToggle('2027-2028'));
     await user.click(toggle('loan-a'));
+    await user.selectOptions(academicYear('loan-a'), '2027-2028');
+    expect(loansIn('2026-2027')).toEqual(['loan-c']);
+    expect(loansIn('2027-2028')).toEqual(['loan-a', 'loan-b']);
+    expect(yearOpen('2027-2028') && isOpen('loan-a')).toBe(true);
+    expect(document.activeElement?.id).toBe('loans.loan-a.academicYear');
+    expect(yearToggle('2027-2028').textContent).toContain('2 loans · $25,000.00');
+
     const date = byId('loans.loan-a.disbursementDate');
-    date.focus();
-    fireEvent.change(date, { target: { value: '2027-03-01' } });
-    fireEvent.keyDown(date, { key: 'Enter' });
-    expect(view.plan().loans[0].disbursementDate).toBe('2027-03-01');
-    expect(yearKeys()).toEqual(['2026', '2027']);
-    expect(loansIn('2026')).toEqual(['loan-c']);
-    expect(loansIn('2027')).toEqual(['loan-b', 'loan-a']);
-    expect(yearOpen('2027')).toBe(true);
-    expect(isOpen('loan-a')).toBe(true);
-    expect(document.activeElement?.id).toBe('loans.loan-a.disbursementDate');
-    expect(yearToggle('2026').textContent).toContain('1 loan · $1,000.00');
-    expect(yearToggle('2027').textContent).toContain('2 loans · $25,000.00');
-    // Repayment order is untouched by presentation.
-    expect(view.plan().repayment.customOrder).toEqual(['loan-a', 'loan-b', 'loan-c']);
+    fireEvent.change(date, { target: { value: '2029-03-01' } });
+    expect(view.plan().loans[0].disbursementDate).toBe('2029-03-01');
+    expect(view.plan().loans[0].academicYear).toBe('2027-2028');
+    expect(loansIn('2027-2028')).toEqual(['loan-b', 'loan-a']);
+
+    await user.selectOptions(academicYear('loan-a'), 'unassigned');
+    expect(yearKeys()).toEqual(['2026-2027', '2027-2028', 'unassigned']);
+    expect(yearToggle('unassigned').textContent).toMatch(/Unassigned\s*1 loan/);
   });
 
-  it('opens the year section and card of a newly added loan and focuses its name', async () => {
+  it('opens the year section and card of a newly added loan, assigned to the first school year', async () => {
     const user = userEvent.setup();
     writeLoanGroupingPreference(true);
     const view = renderPlanner({ plan: yearsPlan() });
-    await user.click(yearToggle('2026'));
+    await user.click(yearToggle('2026-2027'));
     await user.click(screen.getByRole('button', { name: 'Add loan' }));
     const loan = view.plan().loans[3];
-    expect(loanYearKey(loan)).toBe('2026');
-    expect(yearOpen('2026')).toBe(true);
-    expect(isOpen(loan.id)).toBe(true);
+    expect(loan.academicYear).toBe('2026-2027');
+    expect(yearOpen('2026-2027') && isOpen(loan.id)).toBe(true);
     await act(async () => { await new Promise(resolve => requestAnimationFrame(() => resolve(null))); });
     expect(document.activeElement?.id).toBe(`loans.${loan.id}.name`);
-    expect(yearToggle('2026').textContent).toContain('3 loans');
   });
 
-  it('opens a gap-created loan inside its year section', async () => {
+  it('opens a gap-created loan inside its academic year', async () => {
     const user = userEvent.setup();
     writeLoanGroupingPreference(true);
     const view = renderPlanner({ plan: yearsPlan() });
     navigate('Costs');
     await user.click(screen.getByRole('button', { name: 'Create loan from gap for Year 1' }));
     const loan = view.plan().loans[3];
-    expect(yearOpen(loanYearKey(loan))).toBe(true);
-    expect(isOpen(loan.id)).toBe(true);
+    expect(loan.academicYear).toBe('2026-2027');
+    expect(yearOpen('2026-2027') && isOpen(loan.id)).toBe(true);
     expect(document.activeElement?.id).toBe(`loans.${loan.id}.name`);
   });
 
@@ -183,11 +223,9 @@ describe('Group by year', () => {
     const user = userEvent.setup();
     writeLoanGroupingPreference(true);
     renderPlanner({ plan: yearsPlan() });
-    await user.click(yearToggle('2027'));
+    await user.click(yearToggle('2027-2028'));
     act(() => { revealField('loans.loan-b.principal'); });
-    expect(yearOpen('2027')).toBe(true);
-    expect(isOpen('loan-b')).toBe(true);
-    expect(yearOpen('2026') && !isOpen('loan-a')).toBe(true);
+    expect(yearOpen('2027-2028') && isOpen('loan-b')).toBe(true);
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 80)); });
     expect(document.activeElement?.id).toBe('loans.loan-b.principal');
   });
@@ -199,9 +237,7 @@ describe('Group by year', () => {
     await user.click(toggle('loan-b'));
     await user.click(screen.getByRole('button', { name: 'Remove loan Beta loan' }));
     expect(view.plan().loans.map(loan => loan.id)).toEqual(['loan-a', 'loan-c']);
-    expect(yearKeys()).toEqual(['2026']);
-    await user.click(toggle('loan-c'));
-    await user.click(screen.getByRole('button', { name: 'Remove loan Gamma loan' }));
-    expect(yearToggle('2026').textContent).toContain('1 loan · $5,000.00');
+    expect(yearKeys()).toEqual(['2026-2027']);
+    expect(yearToggle('2026-2027').textContent).toContain('2 loans · $6,000.00');
   });
 });

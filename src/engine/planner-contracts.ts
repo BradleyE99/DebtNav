@@ -36,8 +36,14 @@ export interface Resource {
 export interface PlannerYear extends SchoolYear { costItems: CostItem[]; resources: Resource[]; bufferPercent: string }
 
 export interface PlannerLoan extends Loan {
-  /** Set when created from a year's gap; used for year attribution and mismatch notices. */
+  /** Set when created from a year's gap; records the year for mismatch notices. */
   schoolYearId?: string;
+  /**
+   * The academic year this loan pays for: 'YYYY-YYYY' or 'unassigned'. Decides which school year's
+   * borrowing (and federal annual limit) the loan counts toward; never affects dates or interest.
+   * Absent only on loans saved before academic years existed (see loanAcademicYear).
+   */
+  academicYear?: string;
   /** Gap + buffer at creation time; never auto-updated (US-402). */
   gapAtCreation?: Money;
   /** Modeling assumption; default true. False keeps accrued interest as separate unpaid interest. */

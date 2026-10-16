@@ -11,6 +11,7 @@ import { applyOverrides } from './paths';
 import { getStrategy, listStrategies } from './strategies/registry';
 import { addMonths, addYears, monthKey, validDate } from './dates';
 import { federalReference } from '../policy/reference';
+import { UNASSIGNED_ACADEMIC_YEAR, academicYearOfSchoolYear, isAcademicYear } from './academicYear';
 
 export function createDefaultPlan(): PlannerPlan {
   const plan: PlannerPlan = {
@@ -77,9 +78,34 @@ function attributedYearIndex(plan: PlannerPlan, schoolYearId: string | undefined
   return explicit >= 0 ? explicit : yearIndexForDate(plan, date);
 }
 
-/** Index of the school year a loan belongs to (explicit schoolYearId, else disbursement date), or -1. */
+/**
+ * The academic year ('2026-2027') a loan is assigned to, or null when unassigned. A loan saved before
+ * academic years existed keeps its earlier attribution: its explicit schoolYearId, else the school
+ * year containing its disbursement date (assignLegacyAcademicYears stores that on load).
+ */
+export function loanAcademicYear(plan: PlannerPlan, loan: PlannerLoan): string | null {
+  if (loan.academicYear !== undefined) return isAcademicYear(loan.academicYear) ? loan.academicYear : null;
+  const index = attributedYearIndex(plan, loan.schoolYearId, loan.disbursementDate);
+  return index >= 0 ? academicYearOfSchoolYear(plan.schoolYears[index]) : null;
+}
+
+/** Index of the plan school year matching a loan's academic year, or -1 (unassigned or outside the plan). */
 export function loanYearIndex(plan: PlannerPlan, loan: PlannerLoan): number {
-  return attributedYearIndex(plan, loan.schoolYearId, loan.disbursementDate);
+  const academicYear = loanAcademicYear(plan, loan);
+  return academicYear === null ? -1 : plan.schoolYears.findIndex(year => academicYearOfSchoolYear(year) === academicYear);
+}
+
+/**
+ * Stores the academic year of loans saved before academic years existed, so it no longer follows the
+ * disbursement date. Uses only the attribution those loans already had; others become 'unassigned'.
+ */
+export function assignLegacyAcademicYears(plan: PlannerPlan): PlannerPlan {
+  if (plan.loans.every(loan => loan.academicYear !== undefined)) return plan;
+  return {
+    ...plan,
+    loans: plan.loans.map(loan => loan.academicYear !== undefined ? loan
+      : { ...loan, academicYear: loanAcademicYear(plan, loan) ?? UNASSIGNED_ACADEMIC_YEAR }),
+  };
 }
 
 /** US-302: gross annual value before the unavailable share: hourly jobs earn wage × hours × weeks,
@@ -117,7 +143,7 @@ function summarizeYear(plan: PlannerPlan, year: PlannerYear, index: number): Yea
     .plus(sum(events.filter(event => event.type === 'aid').map(event => event.amount)));
   const gap = D.max(0, costs.minus(resources));
   const bufferedGap = cents(gap.times(new D(1).plus(new D(year.bufferPercent).div(100))));
-  const loans = plan.loans.filter(loan => attributedYearIndex(plan, loan.schoolYearId, loan.disbursementDate) === index);
+  const loans = plan.loans.filter(loan => loanYearIndex(plan, loan) === index);
   return {
     yearId: year.id,
     costs: money(costs),
@@ -127,7 +153,8 @@ function summarizeYear(plan: PlannerPlan, year: PlannerYear, index: number): Yea
     bufferedGap: money(bufferedGap),
     borrowed: money(sum(loans.map(loan => loan.principal))),
     // US-402: loans created from a gap never auto-update; flag them when the gap has moved.
-    mismatchLoanIds: loans.filter(loan => loan.gapAtCreation !== undefined && !new D(loan.gapAtCreation).eq(bufferedGap)).map(loan => loan.id),
+    // A gap loan reassigned to another academic year no longer tracks this year's gap.
+    mismatchLoanIds: loans.filter(loan => loan.gapAtCreation !== undefined && loan.schoolYearId === year.id && !new D(loan.gapAtCreation).eq(bufferedGap)).map(loan => loan.id),
   };
 }
 
@@ -149,7 +176,7 @@ export function createLoanFromGap(plan: PlannerPlan, yearId: string, newId: stri
   if (!year) return base;
   let amount = '0.00';
   try { amount = summarizeYear(plan, year, index).bufferedGap; } catch { /* incomplete inputs: start from 0.00 */ }
-  return { ...base, principal: amount, schoolYearId: year.id, gapAtCreation: amount };
+  return { ...base, principal: amount, schoolYearId: year.id, academicYear: academicYearOfSchoolYear(year), gapAtCreation: amount };
 }
 
 // ------------------------------------------------------------------ Validation of planner-only fields

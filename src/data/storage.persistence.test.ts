@@ -34,9 +34,9 @@ function richPlan(): PlannerPlan {
   year.resources.push({ id: 'job', type: 'job', label: 'Café ☕', amount: '0.00', incomeMode: 'hourly', hourlyWage: '15.00', hoursPerWeek: '15', weeksWorked: '30', unavailablePercent: '40' });
   plan.loans.push({
     id: 'loan-a', name: 'Direct Unsub', type: 'unsubsidized', principal: '5500.00', annualRate: '0.0653', disbursementDate: year.startDate,
-    termMonths: 120, schoolYearId: year.id, gapAtCreation: '5500.00', capitalizeInterest: false, monthlyPayment: '75.00', payInterestWhileInSchool: true,
+    termMonths: 120, schoolYearId: year.id, academicYear: '2026-2027', gapAtCreation: '5500.00', capitalizeInterest: false, monthlyPayment: '75.00', payInterestWhileInSchool: true,
   });
-  plan.loans.push({ id: 'loan-b', name: 'Private', type: 'private', principal: '2000.00', annualRate: '0.09', disbursementDate: year.startDate, termMonths: 120, accruesInterestInSchool: false });
+  plan.loans.push({ id: 'loan-b', name: 'Private', type: 'private', principal: '2000.00', annualRate: '0.09', disbursementDate: year.startDate, termMonths: 120, accruesInterestInSchool: false, academicYear: '2024-2025' });
   plan.repayment = { ...plan.repayment, strategyId: 'custom', customOrder: ['loan-b', 'loan-a'], mode: 'federal', federalPlan: 'ibr', familySize: 3, maxMonths: 480 };
   plan.lifeEvents.push({ id: 'bonus', name: 'Bonus', date: '2031-06-01', type: 'windfall', amount: '1000.00', allocationPercent: '50', recurrence: 'yearly', recurrenceEndDate: '2035-06-01' });
   plan.scenarios.push({ id: 's1', name: 'Higher salary', overrides: { 'postGradIncome.annualSalary': '70000.00', 'settings.graceMonths': 0 } });
