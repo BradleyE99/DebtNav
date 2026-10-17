@@ -138,6 +138,18 @@ export function IntegerField(props: BaseProps<number> & { min: number; max: numb
   );
 }
 
+/** Optional whole number: blank text means "not set" (undefined), which is different from 0. */
+export function OptionalIntegerField(props: BaseProps<number | undefined> & { min: number; max: number; suffix?: string }) {
+  return (
+    <DraftInput<number | undefined>
+      {...props}
+      inputMode="numeric"
+      format={value => (value === undefined ? '' : String(value))}
+      parse={text => parseIntegerInput(text, { min: props.min, max: props.max, optional: true })}
+    />
+  );
+}
+
 export function QuantityField(props: BaseProps<string> & { max: string; places?: number; noun?: string; suffix?: string }) {
   return (
     <DraftInput<string>

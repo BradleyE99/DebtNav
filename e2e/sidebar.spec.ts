@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { test, expect, openPlanner } from './support/fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 // Sidebar navigation (desktop) and off-canvas drawer (≤ 768 px), driven with real mouse and keyboard input.
@@ -10,7 +11,7 @@ const SECTIONS = [
   { id: 'setup', label: 'Timeline' },
   { id: 'school', label: 'Costs' },
   { id: 'loans', label: 'Loans' },
-  { id: 'repayment', label: 'Repayment' },
+  { id: 'repayment', label: 'Repayment Plan' },
   { id: 'events', label: 'Life events' },
   { id: 'scenarios', label: 'Scenarios' },
   { id: 'federal', label: 'Federal' },
@@ -47,17 +48,18 @@ async function settledMainBox(page: Page) {
 
 /** Reload (the disclaimer stays dismissed) so keyboard navigation starts from the top of the document. */
 async function freshPage(page: Page) {
-  await page.reload();
+  // Load without a dashboard hash: a hash URL focuses that dashboard's heading on load.
+  await page.goto('/');
+  // The account plan loads before the shell renders; keyboard input before then goes nowhere.
+  await expect(page.locator('.dashboard')).toBeVisible();
   await expect(page.getByRole('button', { name: 'I understand' })).toHaveCount(0);
 }
 /** Waits for CSS animations (drawer slide-in) to finish before measuring. */
 const animationsDone = (page: Page) => page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running'));
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-  await page.getByRole('button', { name: 'I understand' }).click();
+// Every test signs in as a fresh account through the real OIDC flow; the sidebar preference is per browser.
+test.beforeEach(async ({ page, user }) => {
+  await openPlanner(page, user);
 });
 
 // ------------------------------------------------------------------ desktop sidebar
@@ -84,11 +86,11 @@ test('direct section URLs and Back/Forward keep the navigation highlight in sync
   await expect(navLink(page, 'Loans')).toHaveAttribute('aria-current', 'page');
   await page.reload();
   await expect(navLink(page, 'Loans')).toHaveAttribute('aria-current', 'page');
-  await navLink(page, 'Repayment').click();
+  await navLink(page, 'Repayment Plan').click();
   await navLink(page, 'Scenarios').click();
   await page.goBack();
   await expect(page).toHaveURL(/#repayment$/);
-  await expect(navLink(page, 'Repayment')).toHaveAttribute('aria-current', 'page');
+  await expect(navLink(page, 'Repayment Plan')).toHaveAttribute('aria-current', 'page');
   await page.goForward();
   await expect(page).toHaveURL(/#scenarios$/);
   await expect(navLink(page, 'Scenarios')).toHaveAttribute('aria-current', 'page');

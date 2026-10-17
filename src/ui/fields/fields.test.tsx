@@ -38,7 +38,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     navigateTo('school', true);
     const id = `schoolYears.${yearId}.costItems.cost-1.amount`;
     const field = byId(id);
-    expect(figure(yearCard(), 'Borrowing gap (a calculation, not a recommendation)')).toBe('$6,000.00');
+    expect(figure(yearCard(), 'Funding gap (a calculation, not a recommendation)')).toBe('$6,000.00');
 
     await user.click(field);
     await user.clear(field);
@@ -55,7 +55,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     await user.type(field, '$15,500.25');
     expect(field.getAttribute('aria-invalid')).toBeNull();
     expect(view.plan().schoolYears[0].costItems[0].amount).toBe('15500.25');
-    expect(figure(yearCard(), 'Borrowing gap (a calculation, not a recommendation)')).toBe('$11,500.25');
+    expect(figure(yearCard(), 'Funding gap (a calculation, not a recommendation)')).toBe('$11,500.25');
     expectNoCalculateButton();
   });
 
@@ -106,28 +106,36 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     expect(figure(loanCard('loan-a'), 'Minimum monthly payment')).not.toBe(before);
   });
 
-  it('integer: grace period', async () => {
+  // v4 (US-507): the global grace period is gone; the integer field exercised here is "payments start N
+  // months after graduation" in Repayment Plan (repayment.voluntaryStart.months, 0–60).
+  it('integer: months after graduation when payments start', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
-    navigateTo('setup');
-    const field = byId('settings.graceMonths');
-    const setup = byId('setup-heading').closest('section') as HTMLElement;
-    expect(setup.textContent).toContain('Repayment starts Nov 20, 2030');
+    navigateTo('repayment');
+    const id = 'repayment.voluntaryStart.months';
+    const field = byId(id);
+    const months = () => { const start = view.plan().repayment.voluntaryStart; return start.kind === 'afterGraduation' ? start.months : null; };
+    const firstPayment = () => screen.getByTestId('first-voluntary-payment').textContent;
+    expect(firstPayment()).toBe('Dec 20, 2030');
     await user.click(field);
     await user.clear(field);
     expect(field.getAttribute('aria-invalid')).toBe('true');
-    expect(errorText('settings.graceMonths')).toMatch(/Enter a whole number/);
-    expect(view.plan().settings.graceMonths).toBe(6);
+    expect(errorText(id)).toMatch(/Enter a whole number/);
+    expect(months()).toBe(6);
 
     await user.type(field, '2.5');
     expect(field.value).toBe('2.5');
     expect(field.getAttribute('aria-invalid')).toBe('true');
-    expect(view.plan().settings.graceMonths).toBe(2);
+    expect(months()).toBe(2);
     await user.clear(field);
     await user.type(field, '12');
     expect(field.getAttribute('aria-invalid')).toBeNull();
-    expect(view.plan().settings.graceMonths).toBe(12);
-    expect(setup.textContent).toContain('Repayment starts May 20, 2031');
+    expect(months()).toBe(12);
+    expect(firstPayment()).toBe('Jun 20, 2031');
+    await user.clear(field);
+    await user.type(field, '61');
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(months()).toBe(6); // '6' was the last valid text while typing '61'
   });
 
   it('date: loan disbursement date (blank is an error, never a default)', async () => {
@@ -219,8 +227,8 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
   it('valid edits persist (saved document) and reload into the fields', async () => {
     const user = userEvent.setup();
     const first = renderPlanner({ plan: samplePlan() });
-    navigateTo('income');
-    const salary = screen.getByLabelText('Expected annual salary') as HTMLInputElement;
+    navigateTo('repayment');
+    const salary = screen.getByLabelText('Gross annual salary (before taxes)') as HTMLInputElement;
     await user.click(salary);
     await user.clear(salary);
     await user.type(salary, '61,250');
@@ -229,7 +237,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     const storage = first.storage;
     cleanup();
     renderPlanner({ storage });
-    navigateTo('income');
-    expect((screen.getByLabelText('Expected annual salary') as HTMLInputElement).value).toBe('61,250.00');
+    navigateTo('repayment');
+    expect((screen.getByLabelText('Gross annual salary (before taxes)') as HTMLInputElement).value).toBe('61,250.00');
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { dashboardForFieldId } from '../data/readiness';
+import { dashboardForFieldId, readinessStatusText } from '../data/readiness';
 import { ResultFigure } from './results/Readiness';
 import type { PlannerStore } from '../engine/planner-contracts';
 import { PlannerProvider, usePlanner } from './PlannerContext';
@@ -12,6 +12,7 @@ import { EventsSection } from './sections/EventsSection';
 import { ScenariosSection } from './sections/ScenariosSection';
 import { FederalSection } from './sections/FederalSection';
 import { DataSection, SaveStatusBadge } from './sections/DataSection';
+import type { AccountInfo, WorkbookApi } from './sections/dataExchange';
 import { ResultsSection } from './results/ResultsSection';
 import { KeyFigures } from './results/KeyFigures';
 import { AppShell } from './nav/AppShell';
@@ -19,20 +20,32 @@ import { NAV_ITEMS } from './nav/navItems';
 import { navigateDashboard, type NavigateDetail } from './nav/navigation';
 import { onRevealRequest } from './reveal';
 import { IncomeSection } from './sections/IncomeSection';
-import { formatCurrency, formatDate, formatMonthYear } from './format';
+import { OverviewContent } from './overview/OverviewContent';
+import { UndoHistory } from './common/UndoHistory';
+import { AccountHeader } from './auth/AuthComponents';
+import { formatCurrency, formatDate, formatMonthYear, plural } from './format';
 import { money, sum } from '../engine/money';
 import './planner.css';
 
+export interface PlannerAppProps {
+  store: PlannerStore;
+  /** Signed-in account (email + sign out). Omitted for the local store (tests, dev fallback). */
+  account?: AccountInfo;
+  /** Excel template/export/import through the account API. Omitted → Excel controls explain they need an account. */
+  workbook?: WorkbookApi;
+  /** Optional "Use my device plan" prompt (US-1201), rendered at the top of the main area. */
+  devicePlanPrompt?: ReactNode;
+}
 
-export default function PlannerApp({ store }: { store: PlannerStore }) {
+export default function PlannerApp({ store, account, workbook, devicePlanPrompt }: PlannerAppProps) {
   return (
     <PlannerProvider store={store}>
-      <PlannerLayout />
+      <PlannerLayout account={account} workbook={workbook} devicePlanPrompt={devicePlanPrompt} />
     </PlannerProvider>
   );
 }
 
-function PlannerLayout() {
+function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppProps, 'store'>) {
   const { store, plan, readiness } = usePlanner();
   const dashboardFromHash = () => {
     const id = window.location.hash.slice(1);
@@ -93,7 +106,11 @@ function PlannerLayout() {
           <div>
             <h1>DebtNav</h1>
           </div>
-          <SaveStatusBadge />
+          <div className="app-header__status">
+            <SaveStatusBadge />
+            {account && <AccountHeader email={account.email} onSignOut={() => { void account.onSignOut(); }} />}
+          </div>
+          <UndoHistory store={store} />
         </header>
       )}
       banner={(
@@ -108,7 +125,6 @@ function PlannerLayout() {
               }}
             />
           )}
-          <UndoBar />
         </>
       )}
       footer={(
@@ -116,15 +132,16 @@ function PlannerLayout() {
           <button type="button" id="disclaimer-open" className="link-button" onClick={() => setDisclaimerReopened(true)}>
             About these estimates (disclaimer)
           </button>
-          <p>DebtNav · Estimates for your own planning, not financial advice. Your data stays on this device.</p>
+          <p>DebtNav · Estimates for your own planning, not financial advice.{account ? ' Your plan is saved to your DebtNav account.' : ''}</p>
         </footer>
       )}
     >
+      {devicePlanPrompt}
       <div className="dashboard" data-dashboard={activeDashboard}>
         {returnTo?.to === activeDashboard && <ReturnLink dashboard={returnTo.from} />}
         {activeDashboard === 'overview' && <Overview />}
         {activeDashboard === 'income' && <IncomeSection requestedFieldId={requestedFieldId} />}
-        {activeDashboard !== 'overview' && activeDashboard !== 'income' && activeDashboard !== 'school' && activeDashboard !== 'results' && <DashboardSummary dashboard={activeDashboard} />}
+        {SUMMARY_DASHBOARDS.has(activeDashboard) && <DashboardSummary dashboard={activeDashboard} />}
         {activeDashboard === 'setup' && <SetupSection />}
         {activeDashboard === 'school' && <SchoolYearsSection requestedFieldId={requestedFieldId} onLoanCreated={id => { setFocusLoanId(id); navigateDashboard('loans', `loans.${id}.name`); }} />}
         {activeDashboard === 'loans' && <LoansSection focusLoanId={focusLoanId} onFocused={clearLoanFocus} />}
@@ -133,27 +150,29 @@ function PlannerLayout() {
         {activeDashboard === 'scenarios' && <ScenariosSection />}
         {activeDashboard === 'federal' && <FederalSection />}
         {activeDashboard === 'results' && <ResultsSection />}
-        {activeDashboard === 'data' && <DataSection />}
+        {activeDashboard === 'data' && <DataSection workbook={workbook} signedIn={Boolean(account)} />}
       </div>
     </AppShell>
   );
 }
 
+/** US-903: introduction to DebtNav's two tasks + cards to the main dashboards. No Results charts or tables. */
 function Overview() {
-  const { plan } = usePlanner();
+  const { plan, readiness } = usePlanner();
+  const loansTotal = formatCurrency(money(sum(plan.loans.map(loan => loan.principal))));
+  const status = {
+    school: plural(plan.schoolYears.length, 'school year'),
+    loans: plan.loans.length ? `${plural(plan.loans.length, 'loan')} · ${loansTotal}` : 'No loans yet',
+    repayment: plan.repayment.payoffTarget?.mode === 'target' ? 'Planning to a payoff target' : `Budget ${formatCurrency(plan.postGradIncome.monthlyDebtBudget)}/mo`,
+    results: readinessStatusText(readiness),
+  };
   return <section id="overview" className="panel overview" aria-labelledby="overview-heading">
-    <h2 id="overview-heading">Overview</h2>
-    <p className="section-intro">Your plan at a glance. Open a dashboard to review or change its details.</p>
+    <OverviewContent headingId="overview-heading" heading="Overview" onOpen={id => navigateDashboard(id)} status={status} />
     <KeyFigures />
-    <div className="button-row overview-actions">
-      <button type="button" className="button-primary" onClick={() => navigateDashboard('income')}>Edit income</button>
-      <button type="button" onClick={() => navigateDashboard('school')}>Review school costs</button>
-      <button type="button" onClick={() => navigateDashboard('loans')}>Manage {plan.loans.length} loans</button>
-      <button type="button" onClick={() => navigateDashboard('results')}>Explore results</button>
-    </div>
-    <p className="field-hint">Your earnings while in school, your expected salary, and the monthly amount you can pay toward loans all live in Income &amp; Earnings.</p>
   </section>;
 }
+
+const SUMMARY_DASHBOARDS = new Set(['setup', 'loans', 'repayment', 'events', 'scenarios', 'data']);
 
 function DashboardSummary({ dashboard }: { dashboard: string }) {
   const { plan, projection } = usePlanner();
@@ -162,12 +181,11 @@ function DashboardSummary({ dashboard }: { dashboard: string }) {
   const metrics: Record<string, [string, ReactNode][]> = {
     setup: [['School years', String(plan.schoolYears.length)], ['Graduation', formatDate(plan.settings.graduationDate)]],
     loans: [['Loans', String(plan.loans.length)], ['Total borrowed', <ResultFigure key="borrowed" result="totalBorrowed" value={formatCurrency(money(sum(plan.loans.map(loan => loan.principal))))} action={false} />]],
-    repayment: [['Monthly loan budget', formatCurrency(plan.postGradIncome.monthlyDebtBudget)],
+    repayment: [['Monthly debt budget', formatCurrency(plan.postGradIncome.monthlyDebtBudget)],
       ['Minimum payments', <ResultFigure key="minimums" result="minimumPayments" value={`${formatCurrency(projection?.minimumTotal)}/mo`} action={false} />],
       ['Total projected interest', <ResultFigure key="interest" result="totalInterest" value={formatCurrency(repayment?.totalInterestPaid)} />]],
-    events: [['Life events', String(plan.lifeEvents.length)], ['Income changes', String(plan.lifeEvents.filter(event => event.type === 'income').length)], ['Starting loan budget', formatCurrency(plan.postGradIncome.monthlyDebtBudget) + '/mo']],
+    events: [['Life events', String(plan.lifeEvents.length)], ['Income changes', String(plan.lifeEvents.filter(event => event.type === 'income').length)], ['Starting debt budget', formatCurrency(plan.postGradIncome.monthlyDebtBudget) + '/mo']],
     scenarios: [['Scenarios', String(plan.scenarios.length)], ['Base debt-free date', <ResultFigure key="debt-free" result="debtFreeDate" nonPayoffValue="No debt-free date" value={repayment?.debtFreeDate ? formatMonthYear(repayment.debtFreeDate) : 'No debt-free date'} />]],
-    federal: [['Federal loans', String(plan.loans.filter(loan => loan.type === 'subsidized' || loan.type === 'unsubsidized').length)], ['School years', String(plan.schoolYears.length)]],
     data: [['School years saved', String(plan.schoolYears.length)], ['Loans saved', String(plan.loans.length)], ['Scenarios saved', String(plan.scenarios.length)]],
   };
   return <dl className="dashboard-metrics" aria-label="Dashboard summary">{(metrics[dashboard] ?? []).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;
@@ -182,18 +200,5 @@ function ReturnLink({ dashboard }: { dashboard: string }) {
         <span aria-hidden="true">←</span> Back to {label}
       </a>
     </p>
-  );
-}
-
-/** One-level undo for destructive edits (record removal, school-year removal, copy-forward, import). */
-function UndoBar() {
-  const { store } = usePlanner();
-  if (!store.undo) return null;
-  const undo = store.undo;
-  return (
-    <div className="undo-bar" role="status">
-      <span>{undo.label}.</span>
-      <button type="button" onClick={() => undo.apply()}>Undo</button>
-    </div>
   );
 }

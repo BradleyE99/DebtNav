@@ -229,6 +229,7 @@ describe('loan cards', () => {
       dismissDisclaimer: () => {}, saveStatus: { state: 'saved', message: null, savedAt: null }, undo: null,
       markUndoable: () => {}, importText: () => ({ ok: false, errors: [] }), exportJson: () => ({ ok: true, value: '' }),
       deleteAllData: () => ({ ok: true, notice: null }),
+      history: { entries: [], canUndo: false, undo: () => {}, clear: () => {} }, replaceDocument: () => {},
     };
     render(<PlannerApp store={store} />);
     expect(toggle('loan-b').textContent).toContain('Unnamed loan 2');

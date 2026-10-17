@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+import { test, expect, openPlanner } from './support/fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 // Readiness checklist journey in a real browser (tester): a new user opens Results, sees what is
@@ -43,12 +44,9 @@ async function noClipping(page: Page) {
   expect(problems).toEqual([]);
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  await page.goto('/#results');
-  await page.reload();
-  await page.getByRole('button', { name: 'I understand' }).click();
+// Every test signs in as a fresh account (empty plan) through the real OIDC flow.
+test.beforeEach(async ({ page, user }) => {
+  await openPlanner(page, user, '#results');
 });
 
 test('empty plan: Results explains what is missing and shows no misleading figures', async ({ page }) => {
@@ -138,7 +136,7 @@ test('budget states: confirm default, below interest (not paid off), zero (missi
   const assumptions = page.locator('main details', { hasText: /check these assumptions/i }).first();
   await assumptions.locator(':scope > summary').click();
   await row(page, 'budget.default').getByRole('button').click();
-  await expect(page).toHaveURL(/#income$/);
+  await expect(page).toHaveURL(/#repayment$/);
   await expect.poll(() => focusedId(page)).toBe('postGradIncome.monthlyDebtBudget');
   const budget = page.locator('[id="postGradIncome.monthlyDebtBudget"]');
 

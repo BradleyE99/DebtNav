@@ -1,0 +1,15 @@
+/* US-903 Overview introduction and navigation cards (signed-in dashboard and public page). */
+.overview-tasks { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
+.overview-task { padding: 14px 16px; border-radius: 8px; background: var(--accent-soft); min-width: 0; }
+.overview-task h3 { margin: 0 0 4px; font-size: 1.02rem; }
+.overview-task p { margin: 0; }
+.overview-cards-title { font-size: 1rem; margin: 18px 0 8px; }
+.overview-cards { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.overview-card { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.overview-card h4 { margin: 0; font-size: 1rem; }
+.overview-card p { margin: 0; color: var(--ink-2); font-size: 0.92rem; }
+.overview-card .overview-card__status { color: var(--ink); font-weight: 600; }
+.overview-card__link { margin-top: auto; align-self: flex-start; text-decoration: none; }
+@media (max-width: 600px) {
+  .overview-cards, .overview-tasks { grid-template-columns: minmax(0, 1fr); }
+}

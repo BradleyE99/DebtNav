@@ -23,7 +23,8 @@ describe('review fixes', () => {
   it('M2: the default share of raises seeds new and switched income-change events', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
-    navigateTo('income', true);
+    // US-501: the default share of raises moved with the other post-graduation fields to Repayment Plan.
+    navigateTo('repayment', true);
     const share = screen.getByLabelText('Default share of raises put toward debt');
     await user.clear(share);
     await user.type(share, '30');
@@ -65,7 +66,9 @@ describe('review fixes', () => {
 
   it('M1: a disbursement date after repayment starts is rejected at the field and results stay visible', async () => {
     const user = userEvent.setup();
-    const view = renderPlanner({ plan: samplePlan() });
+    // v4 (US-507): each loan is checked against its own repayment start; a 0-month lender grace period starts it at graduation.
+    const base = samplePlan();
+    const view = renderPlanner({ plan: { ...base, loans: base.loans.map(loan => (loan.id === 'loan-b' ? { ...loan, requiredPayment: { graceMonths: 0 } } : loan)) } });
     navigateTo('loans', true);
     const field = byId('loans.loan-b.disbursementDate');
     const original = view.plan().loans[1].disbursementDate;
@@ -117,13 +120,12 @@ describe('review fixes', () => {
     expect(totals).toContain('Year 1 cost total$11,500.00');
   });
 
-  it('m5: the federal comparison labels the projection row as federal loans only', () => {
-    const base = samplePlan();
-    renderPlanner({ plan: { ...base, loans: base.loans.map(loan => ({ ...loan, disbursementDate: '2026-06-01' })) } });
+  // m5 is superseded by US-905: the federal repayment-plan comparison was removed (Federal shows "Coming soon").
+  it('m5 (US-905): no federal comparison table remains on the Federal dashboard', () => {
+    renderPlanner({ plan: samplePlan() });
     navigateTo('federal', true);
-    const table = screen.getByRole('region', { name: 'Federal repayment plan comparison' });
-    expect(within(table).getByText('Your projection (federal Direct loans only)')).toBeTruthy();
-    expect(within(table).queryByText(/all loans/)).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Federal repayment plan comparison' })).toBeNull();
+    expect(screen.getByText('Coming soon')).toBeTruthy();
   });
 
   it('m7: the save status is announced by a single live region', () => {
@@ -146,14 +148,17 @@ describe('review fixes', () => {
     expect(screen.getByRole('button', { name: 'Delete all my data' })).toBe(document.activeElement);
   });
 
-  it('m15: the disclaimer states exactly what the Scorecard lookup sends', () => {
+  // m15 updated for accounts (US-1001) and US-905: the Scorecard lookup is gone; the disclaimer states where the plan goes.
+  it('m15: the disclaimer states exactly where plan data is sent', () => {
     renderPlanner({ plan: samplePlan(), disclaimerDismissed: false });
-    expect(screen.getByText(/sends the school name, the data year, the list of requested data fields, and an API key/)).toBeTruthy();
+    expect(screen.getByText(/sent only to DebtNav's server, which saves it to your account/)).toBeTruthy();
+    expect(screen.getByText(/not shared with analytics, advertising or AI services/)).toBeTruthy();
+    expect(screen.queryByText(/Scorecard/)).toBeNull();
   });
 
   it('M1: when repayment cannot be projected, gaps stay visible and the loan date is highlighted', () => {
     const base = samplePlan();
-    const plan: PlannerPlan = { ...base, loans: base.loans.map(loan => (loan.id === 'loan-b' ? { ...loan, disbursementDate: '2031-06-01' } : loan)) };
+    const plan: PlannerPlan = { ...base, loans: base.loans.map(loan => (loan.id === 'loan-b' ? { ...loan, disbursementDate: '2031-06-01', requiredPayment: { graceMonths: 0 } } : loan)) };
     // A stub store bypasses validation so the engine's partial-results path is exercised directly.
     const store: PlannerStore = {
       document: { plan, disclaimerDismissed: true },
@@ -161,6 +166,7 @@ describe('review fixes', () => {
       dismissDisclaimer: () => {}, saveStatus: { state: 'saved', message: null, savedAt: null }, undo: null,
       markUndoable: () => {}, importText: () => ({ ok: false, errors: [] }), exportJson: () => ({ ok: true, value: '' }),
       deleteAllData: () => ({ ok: true, notice: null }),
+      history: { entries: [], canUndo: false, undo: () => {}, clear: () => {} }, replaceDocument: () => {},
     };
     window.scrollTo = () => {};
     render(<PlannerApp store={store} />);

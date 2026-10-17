@@ -58,14 +58,15 @@ describe('editable fields', () => {
   it("accepts '55,000' and '$400', and rejects 'abc' without committing", async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
-    navigateTo('income', true);
-    const salary = screen.getByLabelText('Expected annual salary') as HTMLInputElement;
+    // US-501: post-graduation salary and budget are edited in Repayment Plan (were in Income & Earnings).
+    navigateTo('repayment', true);
+    const salary = screen.getByLabelText('Gross annual salary (before taxes)') as HTMLInputElement;
     await user.tripleClick(salary);
     await user.keyboard('55,000');
     expect(salary.getAttribute('aria-invalid')).toBeNull();
     expect(view.plan().postGradIncome.annualSalary).toBe('55000.00');
 
-    const budget = screen.getByLabelText('Monthly amount available for loan payments') as HTMLInputElement;
+    const budget = screen.getByLabelText('Monthly debt budget (your chosen payment)') as HTMLInputElement;
     await user.clear(budget);
     await user.type(budget, '$400');
     expect(view.plan().postGradIncome.monthlyDebtBudget).toBe('400.00');
@@ -103,7 +104,10 @@ describe('editable fields', () => {
     expect(document.getElementById(`schoolYears.${yearId}.costItems.cost-1.amount`)).toBeNull();
     // A year with no costs reads "Needs costs", never a misleading $0.00 gap.
     expect(keyGap()).toBe('Needs costs');
-    await user.click(within(screen.getByText(/Remove cost "Tuition"/).closest('.undo-bar') as HTMLElement).getByRole('button', { name: 'Undo' }));
+    // US-904: the persistent Undo control (was the transient undo bar) names the newest change.
+    const undo = screen.getByRole('group', { name: 'Undo' });
+    expect(undo.textContent).toContain('Last change: Remove cost "Tuition"');
+    await user.click(within(undo).getByRole('button', { name: 'Undo' }));
     expect(byId(`schoolYears.${yearId}.costItems.cost-1.amount`).value).toBe('10,000.00');
     expect(keyGap()).toBe('$6,000.00');
   });
@@ -334,11 +338,10 @@ describe('repayment', () => {
   it('warns about a budget shortfall and negative amortization without a debt-free date', async () => {
     const user = userEvent.setup();
     renderPlanner({ plan: samplePlan() });
-    navigateTo('income', true);
-    const budget = screen.getByLabelText('Monthly amount available for loan payments');
+    navigateTo('repayment', true);
+    const budget = screen.getByLabelText('Monthly debt budget (your chosen payment)');
     await user.clear(budget);
     await user.type(budget, '50');
-    navigateTo('repayment');
     expect(screen.getByText(/short of the minimum payments/)).toBeTruthy();
     navigateTo('results');
     expect(screen.getByText(/payments don't cover the interest/)).toBeTruthy();
@@ -400,17 +403,17 @@ describe('data and disclaimer', () => {
   it('imports a valid file and rejects an invalid one without changing the plan', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
-    navigateTo('income', true);
+    navigateTo('repayment', true);
     const exported = view.store().exportJson();
     if (!exported.ok) throw new Error('export failed');
-    const budget = screen.getByLabelText('Monthly amount available for loan payments');
+    const budget = screen.getByLabelText('Monthly debt budget (your chosen payment)');
     await user.clear(budget);
     await user.type(budget, '700');
     navigateTo('data');
     await user.upload(screen.getByLabelText('Import plan (JSON)'), jsonFile(exported.value));
     expect(await screen.findByText(/Plan imported/)).toBeTruthy();
-    navigateTo('income');
-    expect((screen.getByLabelText('Monthly amount available for loan payments') as HTMLInputElement).value).toBe('600.00');
+    navigateTo('repayment');
+    expect((screen.getByLabelText('Monthly debt budget (your chosen payment)') as HTMLInputElement).value).toBe('600.00');
     navigateTo('data');
     await user.upload(screen.getByLabelText('Import plan (JSON)'), jsonFile('{bad'));
     expect(await screen.findByText(/Import failed; your current plan is unchanged/)).toBeTruthy();

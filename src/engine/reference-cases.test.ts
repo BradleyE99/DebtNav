@@ -199,7 +199,7 @@ describe('reference: insufficient budgets (US-501, US-505)', () => {
   });
 
   it('budget $200 below the $340.64 minimum: shortfall $140.64, still pays off in 310 months (final $175.57)', () => {
-    const plan = planWith([loan('std', '30000.00', '0.065')], '200.00', p => { p.repayment.maxMonths = 600; });
+    const plan = planWith([loan('std', '30000.00', '0.065')], '200.00');
     const o = outputs(plan);
     expect(o.paymentShortfall).toBe('140.64');
     expect(o.repayment?.status).toBe('paidOff');
@@ -209,8 +209,9 @@ describe('reference: insufficient budgets (US-501, US-505)', () => {
     expect(o.repayment?.debtFreeDate).toBe('2056-09-20');
   });
 
-  it('same shortfall with a 120-month horizon: horizonExceeded, no debt-free date', () => {
-    const r = repayment(planWith([loan('std', '30000.00', '0.065')], '200.00', p => { p.repayment.maxMonths = 120; }));
+  it('a budget $0.10 above interest cannot pay off within the 1200-month simulation cap: horizonExceeded, no debt-free date', () => {
+    // v4 has no user horizon (the old 120-month horizon case); ~1,367 months would be needed.
+    const r = repayment(planWith([loan('std', '30000.00', '0.065')], '162.60'));
     expect(r.status).toBe('horizonExceeded');
     expect(r.debtFreeDate).toBeNull();
     expect(r.totalInterestPaid).toBeNull();

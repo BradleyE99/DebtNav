@@ -260,7 +260,8 @@ describe('repayment projection', () => {
     const paid = project(plan).repayment;
     expect(paid.amortizationSchedule).toHaveLength(12);
     expect(paid.totalInterestPaid).toBe('0.00');
-    plan.repayment.maxMonths = 6;
+    // v4: the cap is the internal 1200-month limit; $0.50/month needs 2,400 months.
+    plan.postGradIncome.monthlyDebtBudget = '0.50';
     const capped = project(plan).repayment;
     expect(capped.status).toBe('horizonExceeded');
     expect(capped.debtFreeDate).toBeNull();
@@ -268,7 +269,8 @@ describe('repayment projection', () => {
 
   it('month-end and leap-year payment dates clamp without drifting', () => {
     const plan = createDefaultPlan();
-    plan.settings = { ...plan.settings, startDate: '2028-01-31', graduationDate: '2032-01-31', graceMonths: 0 };
+    plan.settings = { ...plan.settings, startDate: '2028-01-31', graduationDate: '2032-01-31' };
+    plan.repayment.voluntaryStart = { kind: 'afterGraduation', months: 0 };
     const leap = reconcileSchoolYears(plan);
     leap.loans = [loan('a', '1200', '0', { disbursementDate: '2032-01-31' })];
     leap.postGradIncome.monthlyDebtBudget = '100';
@@ -462,7 +464,6 @@ describe('NFR-3 invariants (fast-check)', () => {
   it('balances never go negative, principal paid equals the starting balance, more budget never means more months', () => {
     fc.assert(fc.property(fc.array(loanArbitrary, { minLength: 1, maxLength: 4 }), fc.integer({ min: 0, max: 400_000 }), strategies, (loans, budgetCents, strategyId) => {
       const plan = createDefaultPlan();
-      plan.repayment.maxMonths = 1200;
       plan.repayment.strategyId = strategyId;
       plan.loans = loans.map((item, i) => loan(`l${i}`, new D(item.principalCents).div(100).toFixed(2), new D(item.rateBasisPoints).div(10000).toString(), {
         termMonths: item.term, type: item.subsidized ? 'subsidized' : 'unsubsidized', disbursementDate: '2029-01-15',

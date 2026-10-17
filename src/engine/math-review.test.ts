@@ -80,10 +80,11 @@ describe('non-payoff statuses', () => {
       plan.postGradIncome.monthlyDebtBudget = budget;
       expect(project(plan).repayment).toMatchObject({ status: 'notAmortizing', debtFreeDate: null, totalInterestPaid: null });
     }
-    plan.postGradIncome.monthlyDebtBudget = '170.00'; // amortizing over 360 months needs $189.62
+    // v4: no user horizon; the internal cap is 1200 months. $0.10 above the interest needs about 1,367 months.
+    plan.postGradIncome.monthlyDebtBudget = '162.60';
     const slow = project(plan).repayment;
     expect(slow).toMatchObject({ status: 'horizonExceeded', debtFreeDate: null, totalInterestPaid: null });
-    expect(slow.amortizationSchedule).toHaveLength(360);
+    expect(slow.amortizationSchedule).toHaveLength(1200);
     expect(slow.warnings.map(w => w.code)).toContain('HORIZON_EXCEEDED');
   });
   it('a $0 base budget that a later raise makes positive still pays off', () => {

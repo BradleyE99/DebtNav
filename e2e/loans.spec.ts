@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+import { test, expect, openPlanner } from './support/fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 // Expandable loan cards, exercised with real mouse and keyboard input in Chromium.
@@ -74,11 +75,9 @@ async function addTwoLoans(page: Page) {
   await waitForSave(page);
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-  await page.getByRole('button', { name: 'I understand' }).click();
+// Every test signs in as a fresh account (empty plan) through the real OIDC flow.
+test.beforeEach(async ({ page, user }) => {
+  await openPlanner(page, user);
   await expect(page.getByRole('heading', { name: 'Estimates, not financial advice' })).toHaveCount(0);
   await navigate(page, 'Loans');
 });
@@ -186,7 +185,7 @@ test('valid edits persist through collapse, sidebar navigation, and reload', asy
   await expectCollapsed(first);
 
   // Use the sidebar to leave and return; valid values belong to the shared plan.
-  await navigate(page, 'Repayment');
+  await navigate(page, 'Repayment Plan');
   await expect(page).toHaveURL(/#repayment$/);
   await navigate(page, 'Loans');
   await expect(page).toHaveURL(/#loans$/);

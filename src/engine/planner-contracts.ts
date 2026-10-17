@@ -1,5 +1,5 @@
 /**
- * Shared full-application contract, schema version 3.
+ * Shared full-application contract, schema version 4 (v0.2 requirements, section 13).
  * Owner: lead. Agents request changes through the lead; do not edit directly.
  *
  * Conventions
@@ -14,10 +14,10 @@
  *   'loans.<loanId>.annualRate', 'lifeEvents.<eventId>.date'. The same path format is used for
  *   (1) FieldError.path from validation, (2) scenario override keys, and (3) DOM input ids in the UI.
  */
-import type { Plan, Loan, SchoolYear, Projection, Money, ISODate, Result } from './contracts';
+import type { Plan, Loan, SchoolYear, Projection, Money, ISODate, Result, FieldError } from './contracts';
 export type { Money, ISODate, FieldError, Result, Projection } from './contracts';
 
-export const SCHEMA_VERSION = 3 as const;
+export const SCHEMA_VERSION = 4 as const;
 
 export type CostCategory = 'tuition' | 'fees' | 'housing' | 'food' | 'books' | 'transportation' | 'personal' | 'other';
 /** 'annual' items count once for the year; fall/spring/summer are semester entries summed into the year. */
@@ -48,7 +48,42 @@ export interface PlannerLoan extends Loan {
   gapAtCreation?: Money;
   /** Modeling assumption; default true. False keeps accrued interest as separate unpaid interest. */
   capitalizeInterest?: boolean;
+  /** US-507: when this loan's required payments start. Absent = default for the loan type (see RequiredPaymentTerms). */
+  requiredPayment?: RequiredPaymentTerms;
 }
+
+/**
+ * US-507 per-loan required-payment terms. Required payments are contractual; they never move because the
+ * user chooses to start voluntary payments earlier or later.
+ * Repayment-period start R (first required payment = R + 1 month, the existing month convention):
+ *   firstDueDate set                       → R = firstDueDate − 1 month (actual due date from the servicer/lender)
+ *   federal (subsidized | unsubsidized)    → R = graduation + FEDERAL_GRACE_MONTHS (labeled assumption)
+ *   private/other, inSchoolPayments true   → payments required from the month after disbursement
+ *   private/other, graceMonths set         → R = graduation + graceMonths
+ *   private/other, nothing set             → 'notConfigured': no required date is estimated (readiness asks);
+ *                                            never a universal 6-month default
+ */
+export interface RequiredPaymentTerms {
+  /** Actual first due date; overrides every estimate. Must not precede disbursement. */
+  firstDueDate?: ISODate;
+  /** private/other only: months after graduation before the first required payment period starts (0–60). */
+  graceMonths?: number;
+  /** private/other only: the lender requires payments while in school. */
+  inSchoolPayments?: boolean;
+}
+/** Labeled assumption for federal Direct loans: repayment period starts six months after graduation (34 CFR 685.207). */
+export const FEDERAL_GRACE_MONTHS = 6 as const;
+/** Internal simulation safety cap (not a user setting). Reaching it means "no payoff found within the modeled limit", never forgiveness. */
+export const SIMULATION_CAP_MONTHS = 1200 as const;
+
+/** US-506: choose a budget and see payoff, or choose a payoff target and see the required budget. */
+export type PayoffTarget =
+  | { mode: 'budget' }
+  | { mode: 'target'; kind: 'date'; date: ISODate }
+  /** Months counted from the first voluntary payment (1–1200); the UI shows years and months. */
+  | { mode: 'target'; kind: 'duration'; months: number };
+/** US-507: when voluntary payments start. 'afterGraduation' follows graduation edits (months 0–60). */
+export type VoluntaryStart = { kind: 'afterGraduation'; months: number } | { kind: 'date'; date: ISODate };
 
 /**
  * income:   new annual salary from `date`; budget changes by (new − previous salary)/12 × allocationPercent.
@@ -72,13 +107,34 @@ export interface Scenario { id: string; name: string; overrides: Record<string, 
 
 /** Any id registered in src/engine/strategies/registry.ts (US-605: new strategies need no contract change). */
 export type StrategyId = string;
-export interface PlannerPlan extends Plan {
+/**
+ * v4: settings.graceMonths and repayment.maxMonths are gone (per-loan RequiredPaymentTerms, voluntaryStart and
+ * SIMULATION_CAP_MONTHS replace them; see the v3 → v4 migration in src/data/storage.ts).
+ * postGradIncome keeps its v3 paths; the Repayment Plan dashboard is its only editor (US-501).
+ */
+export interface PlannerPlan extends Omit<Plan, 'settings' | 'repayment'> {
+  settings: { startDate: ISODate; graduationDate: ISODate; currency: 'USD' };
   schoolYears: PlannerYear[];
   loans: PlannerLoan[];
-  postGradIncome: { annualSalary: Money; monthlyDebtBudget: Money; raiseAllocationPercent: string };
-  repayment: Plan['repayment'] & {
+  postGradIncome: {
+    /** Gross annual salary. Never treated as money available for debt. */
+    annualSalary: Money;
+    /** The user's chosen monthly debt budget. Never changed by the target solver. */
+    monthlyDebtBudget: Money;
+    raiseAllocationPercent: string;
+    /** Optional, user-entered (no tax inference). */
+    monthlyTakeHome?: Money;
+    /** Optional, user-entered monthly living expenses, for affordability context only. */
+    monthlyExpenses?: Money;
+  };
+  repayment: {
     strategyId: StrategyId;
+    /** Legacy field with no UI; imported plans may carry it. */
+    extraMonthlyPayment: Money;
     customOrder: string[];
+    payoffTarget: PayoffTarget;
+    voluntaryStart: VoluntaryStart;
+    /** Stored federal settings, kept but unused in this release (US-905). */
     mode: 'standard' | 'federal';
     federalPlan: 'ibr' | 'rap';
     familySize: number;
@@ -90,7 +146,29 @@ export interface PlannerPlan extends Plan {
 }
 
 // ---------------------------------------------------------------- Projection outputs (never stored)
-export interface YearSummary { yearId: string; costs: Money; resources: Money; gap: Money; surplus: Money; bufferedGap: Money; borrowed: Money; mismatchLoanIds: string[] }
+/** US-1006: borrowed = loan principal allocated to this academic year; remaining = max(0, gap − borrowed). */
+export interface YearSummary { yearId: string; costs: Money; resources: Money; gap: Money; surplus: Money; bufferedGap: Money; borrowed: Money; remaining: Money; mismatchLoanIds: string[] }
+
+/** US-507: estimated (or actual) required-payment timing for one loan. */
+export interface LoanPaymentTiming {
+  loanId: string;
+  /** null when basis is 'notConfigured'. */
+  repaymentPeriodStart: ISODate | null;
+  firstRequiredPaymentDate: ISODate | null;
+  basis: 'actualDueDate' | 'federalDefault' | 'loanGrace' | 'inSchool' | 'notConfigured';
+  /** Plain-language assumption, e.g. "Estimated: federal Direct loans, 6 months after graduation". */
+  assumption: string | null;
+}
+export interface MissedObligationWarning {
+  code: 'MISSED_REQUIRED_PAYMENT'; loanId: string; firstMissedDate: ISODate; missedPayments: number; message: string;
+}
+
+/** US-506 target solver result (src/engine/targetPayment.ts, run off the main thread). */
+export type TargetPaymentResult =
+  | { status: 'feasible'; requiredMonthlyBudget: Money; chosenMonthlyBudget: Money; /** required − chosen */ difference: Money;
+      targetDate: ISODate; verifiedDebtFreeDate: ISODate; totalInterest: Money; iterations: number }
+  | { status: 'infeasible'; reason: 'targetBeforeFirstPayment' | 'beyondSimulationCap' | 'noBudgetReachesTarget'; message: string }
+  | { status: 'invalid'; reason: 'pastTarget' | 'missingInputs' | 'invalidTarget'; errors: FieldError[]; message: string };
 export interface TimelineEntry { id: string; date: ISODate; label: string; type: 'school' | 'graduation' | 'repayment' | 'event' | 'payoff' }
 export interface Comparison { id: string; name: string; projection: Projection; firstPayoffMonth: number | null; interestDifference: Money | null; monthsDifference: number | null }
 /** Positive monthsSaved/interestSaved mean the event shortens payoff / saves interest. */
@@ -100,9 +178,13 @@ export interface EventImpact { eventId: string; monthsSaved: number | null; inte
 export interface PlannerProjection {
   repayment: Projection; years: YearSummary[]; minimumTotal: Money; paymentShortfall: Money;
   timeline: TimelineEntry[]; notices: string[];
+  /** US-507 */
+  paymentTiming: LoanPaymentTiming[]; firstVoluntaryPaymentDate: ISODate; missedObligations: MissedObligationWarning[];
 }
 /** Secondary outputs: computed off the main thread (src/ui/derived Web Worker) so typing stays responsive; the core projection uses a deferred plan value. */
 export interface PlannerComparisons { strategyComparisons: Comparison[]; scenarioComparisons: Comparison[]; eventImpacts: EventImpact[]; scenarioRange: { earliest: ISODate | null; latest: ISODate | null } }
+/** Worker output for US-506: null when payoffTarget.mode is 'budget'. `today` is supplied by the caller (UTC date). */
+export type TargetPaymentOutput = TargetPaymentResult | null;
 export type PlannerResult = Result<PlannerProjection>;
 
 /**
@@ -133,26 +215,52 @@ export interface SaveResult { ok: boolean; notice: string | null }
  * src/data/validation.ts:  validatePlannerPlan(unknown): Result<PlannerPlan>  (FieldError.path uses field paths)
  *                          validateDocument(unknown): Result<PlannerDocument>
  * src/data/storage.ts:     STORAGE_KEY; loadDocument(storage?); saveDocument(doc, storage?); exportDocument(doc): string;
- *                          importDocument(text): Result<PlannerDocument> (migrates v2 → v3); deleteDocument(storage?)
+ *                          importDocument(text): Result<PlannerDocument> (migrates v2 → v3 → v4); deleteDocument(storage?)
+ *                          migrateToCurrent(envelopeDocument, schemaVersion): unknown — pure, shared with server/ and the workbook
  * src/data/parse.ts (data owner): parseMoneyInput / parsePercentInput / parseRatePercentInput / parseIntegerInput /
  *                          parseDateInput / parseTextInput — text → Result-like ParseResult (see file).
  */
 
-/** State hook (src/state/usePlannerDocument.ts, data agent). The UI consumes only this. */
-export type SaveStatus = { state: 'saved' | 'pending' | 'unavailable' | 'error' | 'paused'; message: string | null; savedAt: string | null };
+/**
+ * State hook. The UI consumes only PlannerStore, so PlannerApp works with the local store (component tests,
+ * src/state/usePlannerDocument.ts) and the server store (src/state/useServerPlannerDocument.ts, signed-in app).
+ * 'saved' means saved to the server for the server store; a local cache is never reported as a server save.
+ */
+export type SaveState = 'saved' | 'pending' | 'saving' | 'offline' | 'conflict' | 'error' | 'paused' | 'unavailable';
+export type SaveStatus = { state: SaveState; message: string | null; savedAt: string | null; revision?: number };
+export interface UndoEntry { id: string; label: string; at: string }
+/** US-904: session-only undo history. Never expires on a timer or on later edits; LIFO; capped (50). */
+export interface UndoHistory {
+  /** Oldest first. */
+  entries: readonly UndoEntry[];
+  canUndo: boolean;
+  /** Restores the newest entry's snapshot through the normal commit path (so it is saved like any edit). */
+  undo(): void;
+  clear(): void;
+}
 export interface PlannerStore {
   document: PlannerDocument;
   /** Apply a pure update. The result is validated; invalid plans are rejected and the returned errors
-   * are field-path errors (the stored plan is unchanged). Saving is debounced (≤ 300 ms) and flushed
-   * on pagehide/visibilitychange. */
-  updatePlan(update: (plan: PlannerPlan) => PlannerPlan): Result<PlannerPlan>;
+   * are field-path errors (the stored plan is unchanged). Every committed edit adds an undo entry
+   * (label from options.undoLabel, a pending markUndoable label, or "Edit"). Unlabelled edits, and labelled
+   * ones with options.coalesce, merge with the previous entry of the same label within a short burst
+   * (typing in a field commits on each keystroke). */
+  updatePlan(update: (plan: PlannerPlan) => PlannerPlan, options?: { undoLabel?: string; coalesce?: boolean }): Result<PlannerPlan>;
   dismissDisclaimer(): void;
   saveStatus: SaveStatus;
-  /** One-level undo for destructive edits (record removal, school-year removal, import). */
+  history: UndoHistory;
+  /** Compat: the newest undo entry, or null. */
   undo: { label: string; apply(): void } | null;
+  /** Compat: label for the next committed edit's undo entry. */
   markUndoable(label: string): void;
+  /** JSON import; replaces the plan and is undoable ("Import"). */
   importText(text: string): Result<PlannerDocument>;
+  /** Replace the whole document (Excel import commit); undoable with `label`. */
+  replaceDocument(document: PlannerDocument, label: string): void;
   exportJson(): Result<string>;
-  /** Caller must have obtained explicit user confirmation. Removes only DebtNav's key. */
-  deleteAllData(): SaveResult;
+  /** Caller must have obtained explicit user confirmation. Not undoable. */
+  deleteAllData(): SaveResult | Promise<SaveResult>;
+  /** Server store only. */
+  retrySave?(): void;
+  resolveConflict?(choice: 'reloadServer' | 'keepMine'): void;
 }

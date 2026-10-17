@@ -3,37 +3,32 @@ import type { Resource } from '../../engine/planner-contracts';
 import { D, money, sum } from '../../engine/money';
 import { usePlanner } from '../PlannerContext';
 import { MoneyField, PercentField, QuantityField, SelectField, TextField } from '../fields/fields';
-import { formatCurrency, formatDate, isPositive } from '../format';
+import { formatCurrency, formatDate } from '../format';
 import { newId } from '../ids';
 import { updateResource, updateYear } from '../planUpdates';
 import { onRevealRequest } from '../reveal';
-import { navigateDashboard } from '../nav/navigation';
-import { baseMonthlyBudget, resourceGrossValue, resourceValue } from '../../engine/planner';
+import { goToTarget, navigateDashboard } from '../nav/navigation';
+import { resourceGrossValue, resourceValue } from '../../engine/planner';
 import './income.css';
 
 /** Gross annual earnings and the share available for school, both from the engine. */
 const annualEarnings = (resource: Resource): string => money(resourceGrossValue(resource));
 const availableForSchool = (resource: Resource): string => money(resourceValue(resource));
 
-/** Uses the existing job resources and post-graduation budget; there is one source of truth. */
+/** In-school earnings (job resources of each school year). After-graduation earnings live in Repayment Plan (US-501). */
 export function IncomeSection({ requestedFieldId }: { requestedFieldId?: string }) {
-  const { plan, projection, projectionUpdating, update, remove, readiness } = usePlanner();
+  const { plan, projection, projectionUpdating, update, remove } = usePlanner();
   const requestedParts = requestedFieldId?.split('.');
   const [selectedYearId, setSelectedYearId] = useState(requestedParts?.[0] === 'schoolYears' ? requestedParts[1] : plan.schoolYears[0]?.id ?? '');
   const [openJobId, setOpenJobId] = useState<string | null>(requestedParts?.[2] === 'resources' ? requestedParts[3] : null);
   const [revealedFieldId, setRevealedFieldId] = useState(requestedFieldId);
-  const [raisesOpen, setRaisesOpen] = useState(requestedFieldId === 'postGradIncome.raiseAllocationPercent');
   const addRef = useRef<HTMLButtonElement>(null);
   const year = plan.schoolYears.find(item => item.id === selectedYearId) ?? plan.schoolYears[0];
   const jobs = year?.resources.filter(resource => resource.type === 'job') ?? [];
   const yearSummary = projection?.years.find(item => item.yearId === year?.id);
-  const budgetIsDefault = readiness.items.some(item => item.id === 'budget.default');
-  const extraBudget = isPositive(plan.repayment.extraMonthlyPayment) ? plan.repayment.extraMonthlyPayment : null;
-  const totalBudget = money(baseMonthlyBudget(plan));
 
   useEffect(() => onRevealRequest(id => {
     setRevealedFieldId(id);
-    if (id === 'postGradIncome.raiseAllocationPercent') setRaisesOpen(true);
     const parts = id.split('.');
     if (parts[0] === 'schoolYears' && parts[2] === 'resources') {
       setSelectedYearId(parts[1]);
@@ -57,7 +52,7 @@ export function IncomeSection({ requestedFieldId }: { requestedFieldId?: string 
   return (
     <section id="income" className="panel" aria-labelledby="income-heading">
       <h2 id="income-heading">Income &amp; Earnings</h2>
-      <p className="section-intro">Two separate things live here: earnings that help pay school costs while you study, and the monthly amount you can put toward loans after graduation.</p>
+      <p className="section-intro">How much you make while in school. These earnings count toward each school year's resources and lower its borrowing gap. Earnings after graduation are set in Repayment Plan.</p>
       <div className="income-columns">
         <section className="income-pane" aria-labelledby="school-income-heading">
           <h3 id="school-income-heading">While in school</h3>
@@ -87,30 +82,19 @@ export function IncomeSection({ requestedFieldId }: { requestedFieldId?: string 
               </details>)}
             </div>
             <button type="button" id="income-add-earnings" ref={addRef} onClick={addEarnings} disabled={year.resources.length >= 100}>Add earnings</button>
-          </> : <p className="empty">Set your school dates in Plan setup to enter earnings by school year.</p>}
+          </> : <p className="empty">Set your school dates in Timeline to enter earnings by school year.</p>}
         </section>
         <section className="income-pane" aria-labelledby="postgrad-income-heading">
           <h3 id="postgrad-income-heading">After graduation</h3>
-          <div className="field-grid income-postgrad-fields">
-            <MoneyField id="postGradIncome.monthlyDebtBudget" label="Monthly amount available for loan payments" value={plan.postGradIncome.monthlyDebtBudget}
-              hint={<>This is what actually pays your loans each month: the total for all loans, after taxes, living costs and other needs. Your debt-free date and total interest use it.{budgetIsDefault && <> <strong>Default value</strong>: replace it with your own amount.</>}{extraBudget && <> Your saved plan also adds {formatCurrency(extraBudget)}/mo, so the total used is {formatCurrency(totalBudget)}/mo.</>}</>}
-              onCommit={monthlyDebtBudget => update(p => ({ ...p, postGradIncome: { ...p.postGradIncome, monthlyDebtBudget } }))} />
-            <MoneyField id="postGradIncome.annualSalary" label="Expected annual salary" value={plan.postGradIncome.annualSalary}
-              hint="Optional. Not used to pay loans: it is only the starting point for income changes and raises you add in Life events."
-              onCommit={annualSalary => update(p => ({ ...p, postGradIncome: { ...p.postGradIncome, annualSalary } }))} />
-          </div>
-          <p className="field-hint">Example: a $55,000 salary does not mean $55,000 goes to loans. Only the monthly amount above is paid toward debt; a raise adds its chosen share to that amount from the raise date.</p>
-          <details className="income-raises" open={raisesOpen} onToggle={event => setRaisesOpen(event.currentTarget.open)}>
-            <summary>Default share of future raises for debt</summary>
-            <PercentField id="postGradIncome.raiseAllocationPercent" label="Default share of raises put toward debt" max="100" value={plan.postGradIncome.raiseAllocationPercent}
-              hint="Starting share for new income-change events. Each event keeps its own share; existing events do not change."
-              onCommit={raiseAllocationPercent => update(p => ({ ...p, postGradIncome: { ...p.postGradIncome, raiseAllocationPercent } }))} />
-          </details>
+          <p>Your expected salary, take-home pay, living expenses and the monthly amount you choose to pay toward loans are all set in <strong>Repayment Plan</strong>, so there is one place to change them.</p>
+          <dl className="income-totals" aria-label="After-graduation figures from Repayment Plan">
+            <div><dt>Gross annual salary</dt><dd>{formatCurrency(plan.postGradIncome.annualSalary)}</dd></div>
+            <div><dt>Monthly debt budget</dt><dd>{formatCurrency(plan.postGradIncome.monthlyDebtBudget)}</dd></div>
+          </dl>
           <div className="income-actions">
+            <button type="button" className="button-primary" onClick={() => goToTarget({ dashboard: 'repayment', fieldId: 'postGradIncome.annualSalary' })}>Edit after-graduation earnings in Repayment Plan</button>
             <button type="button" onClick={() => navigateDashboard('events')}>Manage income changes &amp; raises</button>
-            <button type="button" onClick={() => navigateDashboard('repayment')}>Review repayment plan</button>
           </div>
-          <p className="field-hint">Add a new job, raise, or job ending in Life events. The event's chosen share changes your monthly loan budget from its date.</p>
         </section>
       </div>
     </section>

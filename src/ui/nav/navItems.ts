@@ -12,7 +12,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { id: 'setup', label: 'Timeline', icon: 'timeline' },
   { id: 'school', label: 'Costs', icon: 'costs' },
   { id: 'loans', label: 'Loans', icon: 'loans' },
-  { id: 'repayment', label: 'Repayment', icon: 'repayment' },
+  { id: 'repayment', label: 'Repayment Plan', icon: 'repayment' },
   { id: 'events', label: 'Life events', icon: 'events' },
   { id: 'scenarios', label: 'Scenarios', icon: 'scenarios' },
   { id: 'federal', label: 'Federal', icon: 'federal' },

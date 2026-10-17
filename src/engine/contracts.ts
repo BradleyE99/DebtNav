@@ -50,7 +50,7 @@ export interface FieldError {
   message: string;
 }
 export interface ProjectionWarning {
-  code: 'NEGATIVE_AMORTIZATION' | 'NON_AMORTIZING' | 'HORIZON_EXCEEDED';
+  code: 'NEGATIVE_AMORTIZATION' | 'NON_AMORTIZING' | 'HORIZON_EXCEEDED' | 'MISSED_REQUIRED_PAYMENT';
   message: string;
   loanId?: string;
   date?: ISODate;

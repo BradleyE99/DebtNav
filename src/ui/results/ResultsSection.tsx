@@ -10,10 +10,11 @@ import { formatCurrency, formatDate, formatMonthYear, isPositive, plural, strate
 import { BalanceChart } from './BalanceChart';
 import { projectable } from './comparison';
 import { AmortizationSchedule } from './AmortizationSchedule';
+import { PaymentTiming } from './PaymentTiming';
 
 /** "+$640.00 interest, +3 months" relative to the lowest-interest option (neutral wording, US-604). */
 export function differenceText(comparison: Comparison): string {
-  if (comparison.interestDifference === null) return 'Not comparable (no payoff within the horizon)';
+  if (comparison.interestDifference === null) return 'Not comparable (no payoff within the modeled limit)';
   const interest = new D(comparison.interestDifference);
   const months = comparison.monthsDifference ?? 0;
   if (interest.isZero() && months === 0) return 'Lowest modeled interest';
@@ -23,7 +24,7 @@ export function differenceText(comparison: Comparison): string {
 const VIEWS: { id: string; label: string; result: ResultKey }[] = [
   { id: 'summary', label: 'Summary', result: 'debtFreeDate' },
   { id: 'school', label: 'School years', result: 'borrowingGap' },
-  { id: 'loans', label: 'Loan details', result: 'loanDetails' },
+  { id: 'loans', label: 'Loan details & payment dates', result: 'loanDetails' },
   { id: 'strategies', label: 'Strategies', result: 'strategyComparison' },
   { id: 'scenarios', label: 'Scenarios', result: 'scenarioComparison' },
   { id: 'chart', label: 'Balance chart', result: 'balanceChart' },
@@ -107,9 +108,11 @@ function viewSuffix(state: ResultState): string {
 }
 
 function Summary() {
-  const { plan, projection, readiness } = usePlanner();
+  const { plan, projection, readiness, target } = usePlanner();
   if (!projection) return null;
   const repayment = projection.repayment;
+  const missed = projection.missedObligations ?? [];
+  const targetMode = plan.repayment.payoffTarget?.mode === 'target';
   const hasDebt = readiness.results.totalBorrowed.state === 'complete';
   // Only a projection that stops (status notAmortizing) has no debt-free date; temporary negative
   // amortization (e.g. until a raise) is shown as the engine's own warning next to the date.
@@ -130,6 +133,13 @@ function Summary() {
         <Metric label="Total borrowed" value={<ResultFigure result="totalBorrowed" value={formatCurrency(totalBorrowed)} />} />
         <Metric label="Balance when repayment starts" value={<ResultFigure result="loanDetails" value={formatCurrency(repayment?.balanceAtRepaymentStart)} action={false} />}
           detail={repayment && readyState(readiness.results.loanDetails.state) ? formatDate(repayment.repaymentStartDate) : undefined} />
+        <Metric label="Your first payment" value={formatMonthYear(projection.firstVoluntaryPaymentDate)}
+          detail="When you choose to start paying (Repayment Plan)" />
+        {targetMode && (
+          <Metric label="Required monthly payment for your target"
+            value={<ResultFigure result="targetPayment" value={target?.status === 'feasible' ? formatCurrency(target.requiredMonthlyBudget) : 'Calculating…'} />}
+            detail={target?.status === 'feasible' ? `Your budget: ${formatCurrency(target.chosenMonthlyBudget)}` : undefined} />
+        )}
       </dl>
       {hasDebt && negative && (
         <div className="notice notice--warning" role="alert">
@@ -137,7 +147,15 @@ function Summary() {
           <p><strong>Your payments don't cover the interest.</strong> At least one balance grows instead of shrinking, so there is no debt-free date. Increase your monthly amount or change the loan terms.</p>
         </div>
       )}
-      {hasDebt && repayment?.warnings.filter(warning => !(negative && isAmortizationWarning(warning.code))).map(warning => (
+      {hasDebt && missed.length > 0 && (
+        <div className="notice notice--warning" role="alert">
+          <span className="notice-icon" aria-hidden="true">!</span>
+          <p><strong>Required payments come before your first payment.</strong> Lenders may charge late fees or report missed payments.</p>
+          <ul>{missed.map(warning => <li key={warning.loanId}>{warning.message}</li>)}</ul>
+          <p><button type="button" className="link-button" onClick={() => navigateDashboard('repayment', 'repayment.voluntaryStart.months')}>Change when payments start</button></p>
+        </div>
+      )}
+      {hasDebt && repayment?.warnings.filter(warning => warning.code !== 'MISSED_REQUIRED_PAYMENT' && !(negative && isAmortizationWarning(warning.code))).map(warning => (
         <p key={`${warning.code}-${warning.loanId ?? ''}`} className="notice notice--warning">{warning.message}</p>
       ))}
       {hasDebt && isPositive(projection.paymentShortfall) && (
@@ -145,7 +163,8 @@ function Summary() {
       )}
       {projection.notices.map(notice => <p key={notice} className="field-hint">{notice}</p>)}
       <Explain>
-        <p>Debt-free date = date of the final payment that brings every balance to $0.00. It is not shown if payments never cover interest (negative amortization) or payoff is beyond your projection horizon.</p>
+        <p>Debt-free date = date of the final payment that brings every balance to $0.00. It is not shown if payments never cover interest (negative amortization) or no payoff is found within the modeled limit of 100 years (that is never forgiveness).</p>
+        <p>Your first payment is when you choose to start paying. Each loan's first required payment is set by its lender (see Loan details); a later start keeps those obligations and their interest.</p>
         <p>Total interest = interest accrued during school and grace (counted once, whether paid or capitalized) + interest charged during repayment.</p>
         <p>Balance at repayment = principal + capitalized interest. Each month: interest = balance × annual rate ÷ 12, rounded half-up to cents; minimums are paid first, then extra money follows your strategy; the final payment is adjusted so the balance ends at exactly $0.00.</p>
         <p>These are estimates. Servicers may use daily interest and different payment application rules.</p>
@@ -163,16 +182,17 @@ function YearSummaryTable() {
       <h3>School years</h3>
       <TableRegion label="School year summary table">
         <table>
-          <caption>Cost, resources, gap, and amount borrowed per school year</caption>
+          <caption>Cost, resources, funding gap, loans already allocated, and remaining unfunded per school year</caption>
           <thead>
-            <tr><th scope="col">Year</th><th scope="col">Cost</th><th scope="col">Resources</th><th scope="col">Gap</th><th scope="col">Surplus</th><th scope="col">Gap + buffer</th><th scope="col">Borrowed</th></tr>
+            <tr><th scope="col">Year</th><th scope="col">Cost</th><th scope="col">Resources</th><th scope="col">Funding gap</th><th scope="col">Loans allocated</th><th scope="col">Remaining unfunded</th><th scope="col">Surplus</th><th scope="col">Gap + buffer</th></tr>
           </thead>
           <tbody>
             {projection.years.map((year, index) => (
               <tr key={year.yearId}>
                 <th scope="row">Year {index + 1}</th>
                 <td>{noCosts(year.yearId) ? <span className="placeholder">No costs entered</span> : formatCurrency(year.costs)}</td><td>{formatCurrency(year.resources)}</td><td>{noCosts(year.yearId) ? <span className="placeholder">—</span> : formatCurrency(year.gap)}</td>
-                <td>{formatCurrency(year.surplus)}</td><td>{formatCurrency(year.bufferedGap)}</td><td>{formatCurrency(year.borrowed)}</td>
+                <td>{formatCurrency(year.borrowed)}</td><td>{noCosts(year.yearId) ? <span className="placeholder">—</span> : formatCurrency(year.remaining)}</td>
+                <td>{formatCurrency(year.surplus)}</td><td>{formatCurrency(year.bufferedGap)}</td>
               </tr>
             ))}
           </tbody>
@@ -180,7 +200,7 @@ function YearSummaryTable() {
       </TableRegion>
       <Explain>
         <p>Cost = sum of the year's cost items (whole-year and semester entries) + school expense events. Resources = Σ resource amount × (1 − unavailable % ÷ 100) + school aid events.</p>
-        <p>Gap = max(0, cost − resources); surplus = max(0, resources − cost). Gap + buffer = gap × (1 + buffer % ÷ 100). Borrowed = principal of loans created from this year's gap or disbursed during the year.</p>
+        <p>Funding gap = max(0, cost − resources); resources never include loans. Loans allocated = principal of the loans assigned to the year's academic year. Remaining unfunded = max(0, funding gap − loans allocated). Surplus = max(0, resources − cost), shown separately. Gap + buffer = gap × (1 + buffer % ÷ 100), an optional cushion not counted in the remaining amount.</p>
       </Explain>
     </>
   );
@@ -192,6 +212,7 @@ function LoanTable() {
   const name = (id: string) => plan.loans.find(loan => loan.id === id)?.name ?? 'Loan';
   return (
     <>
+      <PaymentTiming />
       <h3>Loans at repayment</h3>
       <TableRegion label="Loans at repayment table">
         <table>
@@ -216,6 +237,7 @@ function LoanTable() {
       <Explain>
         <p>Minimum payment M = P × r ÷ (1 − (1 + r)^−n), where P = balance at repayment, r = annual rate ÷ 12, n = term in months (P ÷ n at 0%). A fixed payment you enter replaces the calculated minimum.</p>
         <p>In-school interest = principal × annual rate × days ÷ 365 from disbursement to repayment start (none for subsidized loans).</p>
+        <p>First required payment: an actual due date you entered, otherwise an estimate — federal Direct loans 6 months after graduation (plus one month to the first bill); private loans use the lender's grace period or in-school terms you entered.</p>
       </Explain>
     </>
   );
@@ -255,8 +277,8 @@ function StrategyComparison() {
 
 /** "Debt-free between Mar 2033 and Nov 2034" (US-802). */
 export function rangeSentence(earliest: string | null, latest: string | null): string {
-  if (!earliest) return 'No plan reaches a debt-free date within the projection horizon.';
-  if (!latest) return `Debt-free as early as ${formatMonthYear(earliest)}; at least one plan doesn't pay off within the projection horizon.`;
+  if (!earliest) return 'No plan reaches a debt-free date within the modeled limit of 100 years.';
+  if (!latest) return `Debt-free as early as ${formatMonthYear(earliest)}; at least one plan doesn't pay off within the modeled limit of 100 years.`;
   if (earliest === latest) return `Debt-free in ${formatMonthYear(earliest)} in every scenario that pays off.`;
   return `Debt-free between ${formatMonthYear(earliest)} and ${formatMonthYear(latest)}.`;
 }
@@ -322,7 +344,7 @@ function Timeline() {
         ))}
       </ol>
       <Explain>
-        <p>School years run from your start date; repayment starts at graduation + grace months; the first payment is one month later. Loan payoff and debt-free dates come from the month-by-month projection. Items are listed in date order.</p>
+        <p>School years run from your start date. Your first payment follows the start you chose in Repayment Plan; each loan's required payments follow its own terms. Loan payoff and debt-free dates come from the month-by-month projection. Items are listed in date order.</p>
       </Explain>
     </>
   );

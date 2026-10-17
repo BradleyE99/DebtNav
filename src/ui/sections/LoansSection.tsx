@@ -1,17 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import type { PlannerLoan } from '../../engine/planner-contracts';
+import type { PlannerLoan, RequiredPaymentTerms } from '../../engine/planner-contracts';
 import type { InSchoolInterestPayment, LoanType } from '../../engine/contracts';
 import { D, money, sum } from '../../engine/money';
 import { federalReference } from '../../policy/reference';
 import { formatRatePercent } from '../../data/parse';
 import { usePlanner } from '../PlannerContext';
 import {
-  CheckboxField, DateField, IntegerField, MoneyField, OptionalMoneyField, RateField, SelectField, TextField,
+  CheckboxField, DateField, IntegerField, MoneyField, OptionalDateField, OptionalIntegerField, OptionalMoneyField, RateField, SelectField, TextField,
 } from '../fields/fields';
+import { timingBasisText } from '../results/PaymentTiming';
 import { useFieldStatus } from '../fields/fieldStatus';
 import { Explain } from '../common/common';
-import { LOAN_TYPE_LABELS, formatCurrency, plural } from '../format';
+import { LOAN_TYPE_LABELS, formatCurrency, formatDate, formatMonthYear, plural } from '../format';
 import { errorsForLoan, fieldIdForPath, updateLoan } from '../planUpdates';
 import { onRevealRequest } from '../reveal';
 import { newId } from '../ids';
@@ -213,6 +214,7 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
       {plan.loans.length >= 50 && <p className="field-hint">You have reached the 50-loan limit.</p>}
       <Explain>
         <p>Unsubsidized and private loans accrue simple interest in school and grace: principal × annual rate × days ÷ 365. Subsidized loans accrue nothing during school and grace.</p>
+        <p>First required payment: an actual due date you enter is used as is. Otherwise federal Direct loans are estimated at 6 months after graduation plus one month; private loans use the grace period you enter (graduation + grace + one month) or, if payments are required in school, the month after disbursement. Loans with no terms set are assumed to start with your first payment.</p>
         <p>Capitalization (a modeling assumption you can turn off per loan) adds that unpaid interest to the balance when repayment starts. If you pay interest while in school, nothing capitalizes and the in-school interest is shown as a monthly cost.</p>
         <p>Minimum payment M = P × r ÷ (1 − (1 + r)^−n), r = annual rate ÷ 12, n = term in months, unless you enter a fixed payment.</p>
         <p>Total borrowed = Σ principal of every loan.</p>
@@ -238,6 +240,7 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
   const accrues = loan.type === 'unsubsidized' || ((loan.type === 'private' || loan.type === 'other') && loan.accruesInterestInSchool !== false);
   const inSchool = inSchoolCost(loan, projection?.repayment?.inSchoolInterestPayments ?? null);
   const academicYear = loanAcademicYear(plan, loan);
+  const timing = projection?.paymentTiming?.find(entry => entry.loanId === loan.id);
   // Inside a year section the card heading sits one level below the year's heading.
   const Heading = nested ? 'h4' : 'h3';
 
@@ -262,6 +265,7 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
             <span className="loan-card__figure"><span className="loan-card__label">Principal</span> <span className="loan-card__value">{formatCurrency(loan.principal)}</span></span>
             <span className="loan-card__figure"><span className="loan-card__label">Annual rate</span> <span className="loan-card__value">{formatRatePercent(loan.annualRate)}%</span></span>
             <span className="loan-card__figure"><span className="loan-card__label">Academic year</span> <span className="loan-card__value">{academicYear ? formatAcademicYear(academicYear) : 'Unassigned'}</span></span>
+            <span className="loan-card__figure"><span className="loan-card__label">First required payment</span> <span className="loan-card__value">{timing?.firstRequiredPaymentDate ? formatMonthYear(timing.firstRequiredPaymentDate) : 'Not set'}</span></span>
             {atRepayment && (
               <span className="loan-card__figure"><span className="loan-card__label">Balance at repayment</span> <span className="loan-card__value">{formatCurrency(atRepayment.balanceAtRepaymentStart)}</span></span>
             )}
@@ -301,6 +305,7 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
             <OptionalMoneyField id={`${base}.monthlyPayment`} label="Fixed monthly payment (optional)" hint="Leave blank to use the calculated minimum. A fixed payment replaces this loan's minimum as its share of your monthly budget; if the budget is less than all shares, each is reduced proportionally."
               value={loan.monthlyPayment} onCommit={monthlyPayment => patch({ monthlyPayment })} />
           </div>
+          <RequiredPaymentFields loan={loan} errorFor={path => loanErrors.find(error => fieldIdForPath(plan, error.path) === path)?.message} />
           <div className="check-group">
             {loan.type === 'subsidized' ? (
               <p className="field-hint">Subsidized: no interest accrues during school and grace, so there is no in-school interest to pay.</p>
@@ -341,6 +346,79 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
         </FieldStatusProvider>
       </div>
     </article>
+  );
+}
+
+type TermsMode = 'notSet' | 'grace' | 'inSchool';
+const TERMS_OPTIONS: [TermsMode, string][] = [
+  ['notSet', 'Not set yet'],
+  ['grace', 'After a grace period following graduation'],
+  ['inSchool', 'Payments are required while in school'],
+];
+
+/** Terms without empty keys; undefined when nothing is set (the contract's "default for the loan type"). */
+function cleanTerms(terms: RequiredPaymentTerms): RequiredPaymentTerms | undefined {
+  const next: RequiredPaymentTerms = {};
+  if (terms.firstDueDate) next.firstDueDate = terms.firstDueDate;
+  if (terms.graceMonths !== undefined) next.graceMonths = terms.graceMonths;
+  if (terms.inSchoolPayments) next.inSchoolPayments = true;
+  return Object.keys(next).length ? next : undefined;
+}
+
+/**
+ * US-507: when this loan's required payments start. Federal Direct loans show the labeled estimate;
+ * private/other loans use the lender's terms (no universal grace default). An actual first due date
+ * overrides any estimate.
+ */
+function RequiredPaymentFields({ loan, errorFor }: { loan: PlannerLoan; errorFor(path: string): string | undefined }) {
+  const { plan, update, projection } = usePlanner();
+  const base = `loans.${loan.id}.requiredPayment`;
+  const terms = loan.requiredPayment ?? {};
+  const federal = loan.type === 'subsidized' || loan.type === 'unsubsidized';
+  const storedMode: TermsMode = terms.inSchoolPayments ? 'inSchool' : terms.graceMonths !== undefined ? 'grace' : 'notSet';
+  // 'grace' can be chosen before a number is entered (nothing is stored until it is: no default grace).
+  const [pickedGrace, setPickedGrace] = useState(false);
+  const mode: TermsMode = storedMode === 'notSet' && pickedGrace ? 'grace' : storedMode;
+  const timing = projection?.paymentTiming?.find(entry => entry.loanId === loan.id);
+  const save = (patch: Partial<RequiredPaymentTerms>, label: string) =>
+    update(p => updateLoan(p, loan.id, { requiredPayment: cleanTerms({ ...(p.loans.find(item => item.id === loan.id)?.requiredPayment ?? {}), ...patch }) }), label);
+
+  return (
+    <fieldset className="loan-required-payment" aria-describedby={`${base}-summary`}>
+      <legend>When payments are required</legend>
+      <p id={`${base}-summary`} className="computed loan-required-payment__summary">
+        First required payment: <strong>{timing?.firstRequiredPaymentDate ? formatDate(timing.firstRequiredPaymentDate) : 'Not set'}</strong>
+        {timing && <span className="subtle"> · {timingBasisText(timing)}</span>}
+      </p>
+      <div className="field-grid">
+        {federal ? (
+          <p className="field-hint loan-required-payment__federal">
+            Federal Direct loans: estimated 6 months after graduation ({formatDate(plan.settings.graduationDate)}), the standard grace period. Leaving school or dropping below half-time earlier starts it sooner. Your servicer's notice gives the actual date.
+          </p>
+        ) : (
+          <>
+            <SelectField id={base} label="Lender's payment terms" options={TERMS_OPTIONS} value={mode}
+              hint="Private loans have no standard grace period. Check your promissory note or lender."
+              onCommit={next => {
+                setPickedGrace(next === 'grace');
+                if (next === 'inSchool') return save({ inSchoolPayments: true, graceMonths: undefined }, 'Set payments required in school');
+                if (next === 'notSet') return save({ inSchoolPayments: undefined, graceMonths: undefined }, 'Clear lender payment terms');
+                if (storedMode === 'inSchool') return save({ inSchoolPayments: undefined }, 'Set lender grace period');
+              }} />
+            {mode === 'grace' && (
+              <OptionalIntegerField id={`${base}.graceMonths`} label="Grace period (months after graduation)" min={0} max={60}
+                value={terms.graceMonths} externalError={errorFor(`${base}.graceMonths`)}
+                hint="0 to 60. 0 means payments start right after graduation."
+                onCommit={graceMonths => save({ graceMonths }, 'Change lender grace period')} />
+            )}
+          </>
+        )}
+        <OptionalDateField id={`${base}.firstDueDate`} label="Actual first due date (optional)" value={terms.firstDueDate}
+          externalError={errorFor(`${base}.firstDueDate`)}
+          hint="From your servicer or lender. Replaces the estimate. Can't be before the disbursement date."
+          onCommit={firstDueDate => save({ firstDueDate }, 'Change first due date')} />
+      </div>
+    </fieldset>
   );
 }
 

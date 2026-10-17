@@ -16,8 +16,9 @@ it('mounts only the chosen dashboard and opens income from the overview', async 
     for (const other of NAV_ITEMS.filter(other => other.id !== item.id)) expect(document.getElementById(other.id)).toBeNull();
     expect(screen.getByRole('link', { name: item.label }).getAttribute('aria-current')).toBe('page');
   }
+  // US-903: the Overview card "How much I make" opens Income & Earnings (was the "Edit income" button).
   navigateTo('overview');
-  await userEvent.click(screen.getByRole('button', { name: 'Edit income' }));
+  await userEvent.click(screen.getByRole('link', { name: 'Open How much I make' }));
   expect(screen.getByRole('heading', { name: 'Income & Earnings' })).toBeTruthy();
 });
 
@@ -37,16 +38,29 @@ it('reuses saved jobs, applies the available share, and keeps salary separate fr
   await user.type(available, '75');
   expect(view.plan().schoolYears[1].resources[0].unavailablePercent).toBe('25');
   expect(document.querySelector('.income-totals')?.textContent).toContain('Available for school$6,000.00');
+  // US-501: the salary is edited in Repayment Plan now (Income only links there); it stays separate from the budget.
+  expect(screen.queryByLabelText(/annual salary/i)).toBeNull();
   const budget = view.plan().postGradIncome.monthlyDebtBudget;
-  const salary = screen.getByLabelText('Expected annual salary');
+  navigateTo('repayment');
+  const salary = screen.getByLabelText('Gross annual salary (before taxes)');
   await user.clear(salary);
   await user.type(salary, '80000');
+  expect(view.plan().postGradIncome.annualSalary).toBe('80000.00');
   expect(view.plan().postGradIncome.monthlyDebtBudget).toBe(budget);
   navigateTo('school');
   expect(document.querySelector('option[value="job"]')).toBeNull();
   navigateTo('income');
   expect(view.plan().schoolYears[1].resources[0].hourlyWage).toBe('20.00');
-  expect(screen.getByLabelText('Expected annual salary')).toHaveProperty('value', '80,000.00');
+  expect(document.querySelector('.income-pane:last-child .income-totals')?.textContent).toContain('$80,000.00');
+});
+
+it('Income links to the after-graduation earnings in Repayment Plan (one source of truth)', async () => {
+  renderPlanner({ plan: samplePlan() });
+  navigateTo('income');
+  await userEvent.click(screen.getByRole('button', { name: 'Edit after-graduation earnings in Repayment Plan' }));
+  await waitFor(() => expect(document.activeElement?.id).toBe('postGradIncome.annualSalary'));
+  expect(window.location.hash).toBe('#repayment');
+  expect(screen.getByRole('link', { name: /Back to Income/ })).toBeTruthy();
 });
 
 it('reveals a loan in another dashboard and expands its card before focus', async () => {

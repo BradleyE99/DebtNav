@@ -1,0 +1,22 @@
+/* Repayment Plan dashboard (US-501, US-506, US-507). */
+.repayment-block { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 4px; min-width: 0; }
+.repayment-block > h3 { margin: 12px 0 6px; }
+.radio-group { flex-direction: column; gap: 4px; }
+.radio-group label { align-items: flex-start; min-height: 32px; }
+.radio-group input { margin-top: 3px; flex: none; }
+.duration-fields { border: 0; padding: 0; margin: 8px 0; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-start; }
+.duration-fields legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
+.duration-fields .field { flex: 0 1 140px; }
+.duration-fields > .field-hint { flex-basis: 100%; }
+.target-result { margin: 12px 0; }
+.target-result.is-updating { opacity: 0.7; }
+.target-result .metric-value { font-size: 1.15rem; }
+.payoff-outcome { margin: 10px 0; }
+.affordability { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #f7faf8; }
+.affordability h4 { margin: 0 0 6px; font-size: 0.95rem; }
+.affordability--short { border-color: var(--warn-line); }
+.payment-timing { margin-top: 12px; }
+.payment-timing td.wrap { white-space: normal; min-width: 220px; }
+@media (max-width: 600px) {
+  .duration-fields .field { flex: 1 1 120px; }
+}

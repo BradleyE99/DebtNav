@@ -1,20 +1,22 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { cleanup, fireEvent, screen, within } from '@testing-library/react';
+import { cleanup, screen } from '@testing-library/react';
 import { renderPlanner, samplePlan } from '../testing/renderPlanner';
 
 beforeEach(() => { window.history.replaceState(null, '', '/#federal'); });
 afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); });
 
-it('compares Tiered Standard, RAP and IBR (unavailable for loans made on/after July 1, 2026) with sources', () => {
-  renderPlanner({ plan: samplePlan() });
-  fireEvent.click(screen.getByText('Compare federal repayment plans', { selector: 'summary' }));
-  const table = screen.getByRole('region', { name: 'Federal repayment plan comparison' });
-  expect(within(table).getByText(/^Tiered Standard \(10-year term\)$/)).toBeTruthy();
-  expect(within(table).getByText('Repayment Assistance Plan (RAP)')).toBeTruthy();
-  const ibrRow = within(table).getByText('Income-Based Repayment (IBR)').closest('tr') as HTMLElement;
-  expect(ibrRow.textContent).toMatch(/Not available:/);
-  expect(screen.getByRole('link', { name: 'Tiered Standard rules' })).toBeTruthy();
-  fireEvent.click(screen.getByText('Explore program earnings', { selector: 'summary' }));
-  expect((screen.getByLabelText('Data year') as HTMLInputElement).value).toBe('latest');
+// US-905 replaced the federal limits, repayment-plan comparison and College Scorecard tools with a placeholder.
+it('shows only "Coming soon": no federal controls, tables or Scorecard lookup', () => {
+  const view = renderPlanner({ plan: samplePlan() });
+  const section = screen.getByRole('region', { name: 'Federal' });
+  expect(section.textContent).toBe('FederalComing soon');
+  expect(section.querySelectorAll('input, select, button, table, details')).toHaveLength(0);
+  expect(screen.queryByText(/Scorecard/)).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Federal repayment plan comparison' })).toBeNull();
+  // The dashboard has no summary metrics either.
+  expect(document.querySelector('.dashboard-metrics')).toBeNull();
+  // Federal loans and stored federal settings are untouched.
+  expect(view.plan().loans.map(loan => loan.type)).toEqual(['unsubsidized', 'private']);
+  expect(view.plan().repayment.federalPlan).toBe(samplePlan().repayment.federalPlan);
 });

@@ -3,7 +3,9 @@ import type {
   PlannerPlan, PlannerYear, PlannerLoan, PlannerResult, PlannerComparisons, Scenario, Comparison, YearSummary,
   TimelineEntry, FieldError, EventImpact, LifeEvent, Resource, Result, PlannerProjection, Money,
 } from './planner-contracts';
-import type { Projection } from './contracts';
+import type { Plan, Projection } from './contracts';
+import { SIMULATION_CAP_MONTHS } from './planner-contracts';
+import { firstVoluntaryPaymentDate, missedObligationsFor, paymentTimingFor, voluntaryStartDate } from './paymentTiming';
 import { D, cents, money, sum, decimalText, moneyText } from './money';
 import { calculateProjection } from './projection';
 import { schoolYearRanges, reconcileYears } from './plan';
@@ -15,11 +17,14 @@ import { UNASSIGNED_ACADEMIC_YEAR, academicYearOfSchoolYear, isAcademicYear } fr
 
 export function createDefaultPlan(): PlannerPlan {
   const plan: PlannerPlan = {
-    settings: { startDate: '2026-08-24', graduationDate: '2030-05-20', graceMonths: 6, currency: 'USD' },
+    settings: { startDate: '2026-08-24', graduationDate: '2030-05-20', currency: 'USD' },
     schoolYears: [],
     loans: [],
     repayment: {
-      strategyId: 'avalanche', extraMonthlyPayment: '0.00', maxMonths: 360, customOrder: [],
+      strategyId: 'avalanche', extraMonthlyPayment: '0.00', customOrder: [],
+      payoffTarget: { mode: 'budget' },
+      // Voluntary payments start with the federal default repayment period (graduation + 6 months).
+      voluntaryStart: { kind: 'afterGraduation', months: 6 },
       mode: 'standard', federalPlan: 'rap', familySize: 1, annualAGI: '55000.00',
     },
     postGradIncome: { annualSalary: '55000.00', monthlyDebtBudget: '400.00', raiseAllocationPercent: '50' },
@@ -144,6 +149,7 @@ function summarizeYear(plan: PlannerPlan, year: PlannerYear, index: number): Yea
   const gap = D.max(0, costs.minus(resources));
   const bufferedGap = cents(gap.times(new D(1).plus(new D(year.bufferPercent).div(100))));
   const loans = plan.loans.filter(loan => loanYearIndex(plan, loan) === index);
+  const borrowed = sum(loans.map(loan => loan.principal));
   return {
     yearId: year.id,
     costs: money(costs),
@@ -151,7 +157,9 @@ function summarizeYear(plan: PlannerPlan, year: PlannerYear, index: number): Yea
     gap: money(gap),
     surplus: money(D.max(0, resources.minus(costs))),
     bufferedGap: money(bufferedGap),
-    borrowed: money(sum(loans.map(loan => loan.principal))),
+    borrowed: money(borrowed),
+    // US-1006: the part of the gap (not gap + buffer) that no loan allocated to this year covers.
+    remaining: money(D.max(0, gap.minus(borrowed))),
     // US-402: loans created from a gap never auto-update; flag them when the gap has moved.
     // A gap loan reassigned to another academic year no longer tracks this year's gap.
     mismatchLoanIds: loans.filter(loan => loan.gapAtCreation !== undefined && loan.schoolYearId === year.id && !new D(loan.gapAtCreation).eq(bufferedGap)).map(loan => loan.id),
@@ -181,7 +189,7 @@ export function createLoanFromGap(plan: PlannerPlan, yearId: string, newId: stri
 
 // ------------------------------------------------------------------ Validation of planner-only fields
 
-function validatePlannerInputs(plan: PlannerPlan): FieldError[] {
+export function validatePlannerInputs(plan: PlannerPlan): FieldError[] {
   const errors: FieldError[] = [];
   const checkMoney = (value: unknown, path: string) => {
     if (!moneyText(value)) errors.push({ path, code: 'INVALID_MONEY', message: 'Enter a nonnegative amount with at most two decimal places.' });
@@ -296,16 +304,53 @@ function budgetSchedule(plan: PlannerPlan, firstPaymentDate: string, horizon: nu
   };
 }
 
-function repaymentFor(plan: PlannerPlan, strategyId: string = plan.repayment.strategyId) {
-  const repaymentStart = addMonths(plan.settings.graduationDate, plan.settings.graceMonths);
-  const horizon = plan.repayment.maxMonths ?? 600;
-  const schedule = validDate(repaymentStart) ? budgetSchedule(plan, addMonths(repaymentStart, 1), horizon) : undefined;
-  return calculateProjection({ ...plan, repayment: { ...plan.repayment, strategyId } }, {
+/**
+ * The one call site of the simulation (also used by the US-506 target solver). US-507: the month grid
+ * starts at the voluntary start; each loan's required payments start at its own repayment period.
+ * Required payments the plan would miss are added to the warnings (MISSED_REQUIRED_PAYMENT).
+ */
+export function repaymentFor(plan: PlannerPlan, strategyId: string = plan.repayment.strategyId, limits: { maxMonths?: number } = {}): Result<Projection> {
+  const start = voluntaryStartDate(plan);
+  const schedule = validDate(start) && validDate(addMonths(start, SIMULATION_CAP_MONTHS + 1))
+    ? budgetSchedule(plan, addMonths(start, 1), SIMULATION_CAP_MONTHS) : undefined;
+  const timing = paymentTimingFor(plan);
+  const firstRequired: Record<string, string> = {};
+  const periodStarts: Record<string, string> = {};
+  for (const entry of timing) {
+    if (entry.firstRequiredPaymentDate !== null) firstRequired[entry.loanId] = entry.firstRequiredPaymentDate;
+    if (entry.repaymentPeriodStart !== null) periodStarts[entry.loanId] = entry.repaymentPeriodStart;
+  }
+  // The M1 projection input: settings.graceMonths is ignored because voluntaryStartDate is given.
+  const projectionPlan: Plan = {
+    settings: { ...plan.settings, graceMonths: 0 },
+    schoolYears: plan.schoolYears,
+    loans: plan.loans,
+    repayment: { strategyId, extraMonthlyPayment: plan.repayment.extraMonthlyPayment },
+  };
+  const result = calculateProjection(projectionPlan, {
     strategy: getStrategy(strategyId, { customOrder: plan.repayment.customOrder }),
     capitalizeInterestByLoan: Object.fromEntries(plan.loans.map(loan => [loan.id, loan.capitalizeInterest !== false])),
     monthlyBudget: schedule?.budgetFor,
     budgetStableFrom: schedule?.stableFrom,
+    voluntaryStartDate: start,
+    firstRequiredPaymentByLoan: firstRequired,
+    repaymentPeriodStartByLoan: periodStarts,
+    // The target solver stops a candidate at its target month (anything later cannot meet the target).
+    maxMonths: Math.min(SIMULATION_CAP_MONTHS, limits.maxMonths ?? SIMULATION_CAP_MONTHS),
   });
+  if (!result.ok) return result;
+  const missed = missedObligationsFor(plan, timing);
+  if (!missed.length) return result;
+  return {
+    ok: true,
+    value: {
+      ...result.value,
+      warnings: [
+        ...missed.map(warning => ({ code: warning.code, message: warning.message, loanId: warning.loanId, date: warning.firstMissedDate })),
+        ...result.value.warnings,
+      ],
+    },
+  };
 }
 
 function firstPayoffMonth(projection: Projection): number | null {
@@ -347,7 +392,7 @@ function baseRepayment(plan: PlannerPlan): Result<Projection> {
 }
 
 function buildTimeline(plan: PlannerPlan, repayment: Projection | null): TimelineEntry[] {
-  const repaymentStart = repayment?.repaymentStartDate ?? addMonths(plan.settings.graduationDate, plan.settings.graceMonths);
+  const repaymentStart = repayment?.repaymentStartDate ?? voluntaryStartDate(plan);
   const timeline: TimelineEntry[] = [
     ...plan.schoolYears.map((year, index) => ({ id: year.id, date: year.startDate, label: `School year ${index + 1}`, type: 'school' as const })),
     { id: 'graduation', date: plan.settings.graduationDate, label: 'Graduation', type: 'graduation' },
@@ -377,6 +422,7 @@ function buildTimeline(plan: PlannerPlan, repayment: Projection | null): Timelin
  */
 export interface RepaymentUnavailable { errors: FieldError[]; reason: string }
 export interface PlannerOutputs extends Omit<PlannerProjection, 'repayment' | 'minimumTotal' | 'paymentShortfall'> {
+  /* paymentTiming, firstVoluntaryPaymentDate and missedObligations (US-507) are always present. */
   /** Null when repayment cannot be projected; see repaymentUnavailable. */
   repayment: Projection | null;
   minimumTotal: Money | null;
@@ -399,6 +445,8 @@ export function calculatePlannerOutputs(plan: PlannerPlan): Result<PlannerOutput
     if (plannerErrors.length) return { ok: false, errors: plannerErrors };
     const years = plan.schoolYears.map((year, index) => summarizeYear(plan, year, index));
     const base = baseRepayment(plan);
+    const paymentTiming = paymentTimingFor(plan);
+    const timing = { paymentTiming, firstVoluntaryPaymentDate: firstVoluntaryPaymentDate(plan), missedObligations: missedObligationsFor(plan, paymentTiming) };
     const notices: string[] = [];
     if (plan.repayment.mode === 'federal') {
       notices.push('The amortization schedule below is the standard repayment model. Federal repayment estimates are shown separately.');
@@ -407,7 +455,7 @@ export function calculatePlannerOutputs(plan: PlannerPlan): Result<PlannerOutput
       return {
         ok: true,
         value: {
-          repayment: null, years, minimumTotal: null, paymentShortfall: null, timeline: buildTimeline(plan, null), notices,
+          repayment: null, years, minimumTotal: null, paymentShortfall: null, timeline: buildTimeline(plan, null), notices, ...timing,
           repaymentUnavailable: { errors: [...base.errors], reason: reasonOf(base.errors) },
         },
       };
@@ -428,6 +476,7 @@ export function calculatePlannerOutputs(plan: PlannerPlan): Result<PlannerOutput
         paymentShortfall: money(D.max(0, minimumTotal.minus(budget))),
         timeline: buildTimeline(plan, repayment),
         notices,
+        ...timing,
         repaymentUnavailable: null,
       },
     };
@@ -443,9 +492,9 @@ export function calculatePlannerOutputs(plan: PlannerPlan): Result<PlannerOutput
 export function calculatePlannerProjection(plan: PlannerPlan): PlannerResult {
   const result = calculatePlannerOutputs(plan);
   if (!result.ok) return result;
-  const { repayment, years, minimumTotal, paymentShortfall, timeline, notices, repaymentUnavailable } = result.value;
+  const { repayment, years, minimumTotal, paymentShortfall, timeline, notices, repaymentUnavailable, paymentTiming, firstVoluntaryPaymentDate: firstPayment, missedObligations } = result.value;
   if (!repayment || minimumTotal === null || paymentShortfall === null) return { ok: false, errors: repaymentUnavailable?.errors ?? failure().errors };
-  return { ok: true, value: { repayment, years, minimumTotal, paymentShortfall, timeline, notices } };
+  return { ok: true, value: { repayment, years, minimumTotal, paymentShortfall, timeline, notices, paymentTiming, firstVoluntaryPaymentDate: firstPayment, missedObligations } };
 }
 
 const monthsOf = (projection: Projection) => projection.amortizationSchedule.length;

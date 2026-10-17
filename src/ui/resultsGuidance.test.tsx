@@ -172,7 +172,7 @@ describe('partial plans', () => {
 });
 
 describe('budget states (§8.7, §8.8)', () => {
-  it('budget $0 → budget.zero missing, action opens Income and focuses the monthly budget', async () => {
+  it('budget $0 → budget.zero missing, action opens Repayment Plan and focuses the monthly budget', async () => {
     const p = complete(p => { p.postGradIncome.monthlyDebtBudget = '0.00'; });
     renderPlanner({ plan: p });
     await goToResults();
@@ -343,7 +343,7 @@ describe('accessibility', () => {
   });
 
   it('valid zeros produce no "needs" rows', async () => {
-    renderPlanner({ plan: complete(p => { p.loans[0].annualRate = '0'; p.settings.graceMonths = 0; p.loans[0].disbursementDate = '2030-05-20'; p.repayment.annualAGI = '0.00'; }) });
+    renderPlanner({ plan: complete(p => { p.loans[0].annualRate = '0'; p.loans[0].requiredPayment = { graceMonths: 0 }; p.loans[0].disbursementDate = '2030-05-20'; p.repayment.annualAGI = '0.00'; }) });
     await goToResults();
     expect(queryChecklistHeading()).toBeNull();
   });
@@ -450,15 +450,24 @@ describe('follow-up guidance (brief §10 gaps)', () => {
     expect(screen.getByRole('link', { name: 'Back to Overview' })).toBeTruthy();
   });
 
-  it('horizon exceeded: the checklist offers a second action that focuses the projection horizon', async () => {
+  // US-506 replaced the user-facing projection horizon (and its "Lengthen projection horizon" action) with an
+  // internal 100-year cap: the only action left is the budget, which opens Repayment Plan.
+  it('payoff beyond the modeled limit: the checklist says so and its budget action opens Repayment Plan', async () => {
     const user = userEvent.setup();
-    renderPlanner({ plan: complete(p => { p.postGradIncome.monthlyDebtBudget = '200.00'; p.repayment.maxMonths = 120; }) });
+    const base = complete();
+    const outputs = calculatePlannerOutputs(base);
+    if (!outputs.ok || !outputs.value.repayment) throw new Error('precondition');
+    const interest = Number(outputs.value.repayment.balanceAtRepaymentStart) * 0.065 / 12;
+    renderPlanner({ plan: complete(p => { p.postGradIncome.monthlyDebtBudget = (Math.ceil(interest * 100) / 100 + 0.05).toFixed(2); }) });
     await goToResults();
     const nonPayoff = await waitFor(() => { const r = row('repayment.nonPayoff'); expect(r, document.querySelector('.readiness')?.textContent ?? '').not.toBeNull(); return r!; });
-    expect(within(nonPayoff).getByRole('button', { name: /budget/i })).toBeTruthy();
-    await user.click(within(nonPayoff).getByRole('button', { name: /lengthen projection horizon/i }));
+    expect(nonPayoff.textContent).toMatch(/modeled limit of 100 years/);
+    expect(within(nonPayoff).getAllByRole('button')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /horizon/i })).toBeNull();
+    await user.click(within(nonPayoff).getByRole('button', { name: /budget/i }));
     await waitFor(() => expect(window.location.hash).toBe('#repayment'));
-    await waitFor(() => expect(document.activeElement?.id).toBe('repayment.maxMonths'));
+    await waitFor(() => expect(document.activeElement?.id).toBe('postGradIncome.monthlyDebtBudget'));
     expect(screen.getByRole('link', { name: 'Back to Results' })).toBeTruthy();
+    expect(screen.queryByLabelText(/projection horizon/i)).toBeNull();
   });
 });

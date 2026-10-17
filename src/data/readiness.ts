@@ -3,7 +3,7 @@
  * which results rest on untouched defaults. Pure (no React, no DOM, no clock). Results, Overview and
  * the dashboard summaries all render from one getPlanReadiness() call so the rules live in one place.
  */
-import type { FieldError, PlannerPlan, PlannerLoan } from '../engine/planner-contracts';
+import type { FieldError, PlannerPlan, PlannerLoan, TargetPaymentOutput } from '../engine/planner-contracts';
 import type { PlannerOutputs, PlannerComparisonsDetailed } from '../engine/planner';
 import { baseMonthlyBudget, createDefaultPlan, resourceGrossValue } from '../engine/planner';
 import { D } from '../engine/money';
@@ -25,8 +25,7 @@ export type ResultKey =
   | 'eventImpacts'
   | 'timeline'
   | 'schoolEarnings'
-  | 'federalLimits'
-  | 'federalPlans';
+  | 'targetPayment';      // US-506 required monthly payment for a payoff target
 
 export type ReadinessSeverity = 'missing' | 'invalid' | 'warning' | 'assumption';
 export type ResultState = 'complete' | 'estimate' | 'incomplete' | 'invalid' | 'nonPayoff' | 'notApplicable';
@@ -83,6 +82,8 @@ export interface ReadinessContext {
    * Ids whose record no longer exists, or whose field already has an engine error, are ignored.
    */
   invalidFieldIds?: readonly string[];
+  /** US-506 solver output from the worker (usePlanner().target); undefined = not computed yet. */
+  target?: TargetPaymentOutput;
   /** Defaults to createDefaultPlan(); used for 'assumption' items. */
   defaults?: PlannerPlan;
 }
@@ -90,7 +91,7 @@ export interface ReadinessContext {
 export const RESULT_KEYS: readonly ResultKey[] = [
   'borrowingGap', 'totalBorrowed', 'loanDetails', 'minimumPayments', 'debtFreeDate', 'totalInterest',
   'paymentSchedule', 'balanceChart', 'strategyComparison', 'scenarioComparison', 'eventImpacts', 'timeline',
-  'schoolEarnings', 'federalLimits', 'federalPlans',
+  'schoolEarnings', 'targetPayment',
 ];
 
 
@@ -102,16 +103,19 @@ const PAYOFF_KEYS: ResultKey[] = ['debtFreeDate', 'totalInterest', 'paymentSched
 /** Results that need the engine's repayment projection (blocked by engine errors). */
 const PROJECTED_KEYS: ResultKey[] = ['loanDetails', 'minimumPayments', ...PAYOFF_KEYS];
 /** Results that need at least one loan with a balance. */
-const LOAN_KEYS: ResultKey[] = ['totalBorrowed', ...PROJECTED_KEYS, 'federalPlans'];
+const LOAN_KEYS: ResultKey[] = ['totalBorrowed', ...PROJECTED_KEYS, 'targetPayment'];
 /** Results that become estimates when the monthly budget is the untouched default. */
 const BUDGET_ESTIMATE_KEYS: ResultKey[] = ['debtFreeDate', 'totalInterest', 'paymentSchedule', 'balanceChart', 'strategyComparison', 'scenarioComparison', 'eventImpacts'];
 /** Results shown as "not paid off" when the projection never reaches $0. */
 const NON_PAYOFF_KEYS: ResultKey[] = ['debtFreeDate', 'totalInterest', 'paymentSchedule', 'balanceChart', 'strategyComparison', 'scenarioComparison', 'eventImpacts'];
 
 const SEVERITY_ORDER: Record<ReadinessSeverity, number> = { invalid: 0, missing: 1, warning: 2, assumption: 3 };
-const FLOW_ORDER: DashboardId[] = ['setup', 'school', 'income', 'loans', 'repayment', 'events', 'scenarios', 'federal', 'overview', 'results', 'data'];
+const FLOW_ORDER: DashboardId[] = ['setup', 'school', 'income', 'loans', 'repayment', 'events', 'scenarios', 'overview', 'results', 'data', 'federal'];
 
-const isDirectLoan = (loan: PlannerLoan) => loan.type === 'subsidized' || loan.type === 'unsubsidized';
+const isPrivateOrOther = (loan: PlannerLoan) => loan.type === 'private' || loan.type === 'other';
+/** US-507: private/other loan with no lender terms entered (no first due date, grace or in-school payments). */
+const requiredPaymentUnset = (loan: PlannerLoan) => isPrivateOrOther(loan) && !loan.requiredPayment?.firstDueDate
+  && loan.requiredPayment?.graceMonths === undefined && loan.requiredPayment?.inSchoolPayments !== true;
 /** "Is this decimal text > 0" — readiness does no money math of its own. */
 const positive = (value: string | null | undefined): boolean => {
   try { return value !== null && value !== undefined && new D(value).gt(0); } catch { return false; }
@@ -139,7 +143,7 @@ export function fieldIdForPath(plan: PlannerPlan, path: string): string {
 /**
  * False when a field id points into a record that no longer exists (e.g. a removed loan), so a
  * leftover draft for it is not reported. Only collection records are checked: 'loans.<id>.principal'
- * needs loan <id>; an optional leaf such as 'repayment.maxMonths' may be absent.
+ * needs loan <id>; an optional leaf such as 'postGradIncome.monthlyTakeHome' may be absent.
  */
 export function fieldRecordExists(plan: PlannerPlan, fieldId: string): boolean {
   let current: unknown = plan;
@@ -161,12 +165,13 @@ export function dashboardForFieldId(plan: PlannerPlan, fieldId: string): Dashboa
   if (fieldId === 'loans-add') return 'loans';
   if (fieldId === 'income-add-earnings') return 'income';
   const [scope, second, collection, recordId] = fieldId.split('.');
-  if (scope === 'repayment' && ['annualAGI', 'familySize', 'federalPlan', 'mode'].includes(second)) return 'federal';
+  // Stored federal settings have no editor in this release (US-905): there is no dashboard to send anyone to.
+  if (scope === 'borrower' || (scope === 'repayment' && ['annualAGI', 'familySize', 'federalPlan', 'mode'].includes(second))) return undefined;
   if (scope === 'schoolYears' && collection === 'resources'
     && plan.schoolYears.find(year => year.id === second)?.resources.some(resource => resource.id === recordId && resource.type === 'job')) return 'income';
   return ({
-    postGradIncome: 'income', schoolYears: 'school', loans: 'loans', lifeEvents: 'events', settings: 'setup',
-    repayment: 'repayment', borrower: 'federal', scenarios: 'scenarios',
+    postGradIncome: 'repayment', schoolYears: 'school', loans: 'loans', lifeEvents: 'events', settings: 'setup',
+    repayment: 'repayment', scenarios: 'scenarios',
   } as Record<string, DashboardId>)[scope];
 }
 
@@ -175,7 +180,7 @@ function keysForField(fieldId: string): ResultKey[] {
   if (scope === 'loans') return LOAN_KEYS;
   if (scope === 'schoolYears') return ['borrowingGap', 'schoolEarnings'];
   if (scope === 'scenarios') return ['scenarioComparison'];
-  if (scope === 'borrower') return ['federalLimits', 'federalPlans'];
+  if (scope === 'borrower') return [];
   return PROJECTED_KEYS;
 }
 
@@ -184,7 +189,7 @@ const RESULT_NAMES: Record<ResultKey, string> = {
   minimumPayments: 'minimum payments', debtFreeDate: 'debt-free date', totalInterest: 'total interest',
   paymentSchedule: 'payment schedule', balanceChart: 'balance chart', strategyComparison: 'strategy comparison',
   scenarioComparison: 'scenario comparison', eventImpacts: 'life event impacts', timeline: 'timeline',
-  schoolEarnings: 'school earnings', federalLimits: 'federal loan limits', federalPlans: 'federal plan estimates',
+  schoolEarnings: 'school earnings', targetPayment: 'required monthly payment for your payoff target',
 };
 
 export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = {}): PlanReadiness {
@@ -257,7 +262,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
   }
 
   // ---------------------------------------------------------------- Monthly loan budget
-  const budgetTarget: ReadinessTarget = { dashboard: 'income', fieldId: 'postGradIncome.monthlyDebtBudget' };
+  const budgetTarget: ReadinessTarget = { dashboard: 'repayment', fieldId: 'postGradIncome.monthlyDebtBudget' };
   const extra = plan.repayment.extraMonthlyPayment;
   if (positive(extra)) {
     add({
@@ -294,18 +299,69 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
       });
     }
     if (repayment && repayment.status !== 'paidOff' && !items.some(item => item.id === 'budget.zero')) {
-      const horizon = plan.repayment.maxMonths ?? 600;
       const below = repayment.status === 'notAmortizing';
       add({
         id: 'repayment.nonPayoff', severity: 'warning',
-        label: below ? 'Your monthly budget doesn\'t cover the interest' : `Your loans aren't paid off within ${horizon} months`,
+        label: below ? 'Your monthly budget doesn\'t cover the interest' : 'No payoff found within the modeled limit of 100 years',
         why: below
           ? 'At least one balance stops shrinking, so there is no debt-free date. Increase your monthly budget or change the loan terms.'
-          : 'A balance is still owed when the projection ends. Increase your monthly budget, or lengthen the projection horizon under Repayment.',
+          : 'A balance is still owed after 100 years of payments. This is not forgiveness: increase your monthly budget, or choose a payoff target to see the payment you would need.',
         blocks: NON_PAYOFF_KEYS, target: budgetTarget, actionLabel: 'Increase monthly budget',
-        ...(below ? {} : { secondaryAction: { target: { dashboard: 'repayment', fieldId: 'repayment.maxMonths' }, actionLabel: 'Lengthen projection horizon' } }),
       });
     }
+  }
+
+  // ---------------------------------------------------------------- Payoff target (US-506)
+  const payoffTarget = plan.repayment.payoffTarget;
+  const targetField = payoffTarget?.mode === 'target' ? (payoffTarget.kind === 'date' ? 'repayment.payoffTarget.date' : 'repayment.payoffTarget.months') : null;
+  const target = context.target;
+  if (hasDebt && targetField && target) {
+    const targetRef: ReadinessTarget = { dashboard: 'repayment', fieldId: targetField };
+    if (target.status === 'invalid' && target.reason !== 'missingInputs') {
+      add({
+        id: 'target.invalid', severity: 'invalid',
+        label: target.reason === 'pastTarget' ? 'Your payoff target date has already passed' : 'Your payoff target is not valid',
+        why: target.message, blocks: ['targetPayment'], target: targetRef, actionLabel: 'Change payoff target',
+      });
+    } else if (target.status === 'invalid') {
+      const first = target.errors[0];
+      const fieldId = first ? fieldIdForPath(plan, first.path) : targetField;
+      add({
+        id: 'target.missingInputs', severity: 'missing', label: 'Your payoff target needs more information',
+        why: target.message, blocks: ['targetPayment'],
+        target: { dashboard: dashboardForFieldId(plan, fieldId) ?? 'repayment', fieldId }, actionLabel: 'Enter missing value',
+      });
+    } else if (target.status === 'infeasible') {
+      add({
+        id: 'target.infeasible', severity: 'warning',
+        label: target.reason === 'targetBeforeFirstPayment' ? 'Your payoff target is before your first payment' : 'No monthly payment reaches your payoff target',
+        why: target.message, blocks: ['targetPayment'], target: targetRef, actionLabel: 'Change payoff target',
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------- Required-payment timing (US-507)
+  for (const loan of plan.loans) {
+    if (!positive(loan.principal)) continue;
+    const timing = outputs?.paymentTiming?.find(entry => entry.loanId === loan.id);
+    if (timing ? timing.basis !== 'notConfigured' : !requiredPaymentUnset(loan)) continue;
+    add({
+      id: `loan.${loan.id}.requiredPaymentUnset`, severity: 'warning',
+      label: `Set when "${loan.name.trim() || 'your private loan'}" requires payments`,
+      why: 'Private and other loans have no standard grace period. Until you enter the lender\'s terms, DebtNav assumes required payments start with your first voluntary payment and can\'t warn about missed required payments.',
+      blocks: ['loanDetails'], target: { dashboard: 'loans', fieldId: `loans.${loan.id}.requiredPayment` }, actionLabel: 'Set payment start',
+    });
+  }
+  const voluntaryField = plan.repayment.voluntaryStart?.kind === 'date' ? 'repayment.voluntaryStart.date' : 'repayment.voluntaryStart.months';
+  for (const missed of outputs?.missedObligations ?? []) {
+    const loan = plan.loans.find(entry => entry.id === missed.loanId);
+    add({
+      id: `missed.${missed.loanId}`, severity: 'warning',
+      label: `"${loan?.name.trim() || 'A loan'}" has required payments before your first payment`,
+      why: missed.message,
+      blocks: ['debtFreeDate', 'totalInterest'], target: { dashboard: 'repayment', fieldId: voluntaryField }, actionLabel: 'Change when payments start',
+      secondaryAction: { target: { dashboard: 'loans', fieldId: `loans.${missed.loanId}.requiredPayment.firstDueDate` }, actionLabel: 'Check loan due date' },
+    });
   }
 
   // ---------------------------------------------------------------- School costs and resources
@@ -372,9 +428,9 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
     }
   }
 
-  // ---------------------------------------------------------------- Salary baseline (income events only) and federal AGI
+  // ---------------------------------------------------------------- Salary baseline (income events only)
   if (hasDebt && plan.lifeEvents.some(event => event.type === 'income')) {
-    const salaryTarget: ReadinessTarget = { dashboard: 'income', fieldId: 'postGradIncome.annualSalary' };
+    const salaryTarget: ReadinessTarget = { dashboard: 'repayment', fieldId: 'postGradIncome.annualSalary' };
     if (!positive(plan.postGradIncome.annualSalary)) {
       add({
         id: 'salary.baseline', severity: 'warning', label: 'Your starting salary is $0.00',
@@ -390,15 +446,6 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
       });
     }
   }
-  const fundedDirect = plan.loans.some(loan => isDirectLoan(loan) && positive(loan.principal));
-  if (fundedDirect && sameValue(plan.repayment.annualAGI, defaults.repayment.annualAGI)) {
-    add({
-      id: 'federal.agiDefault', severity: 'assumption',
-      label: `Confirm your income for federal plans (using the default ${dollars(defaults.repayment.annualAGI)} AGI)`,
-      why: 'Income-driven federal plan estimates depend on your adjusted gross income.',
-      blocks: ['federalPlans'], target: { dashboard: 'federal', fieldId: 'repayment.annualAGI' }, actionLabel: 'Confirm income',
-    });
-  }
 
   // ---------------------------------------------------------------- Sort, then derive result states
   items.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
@@ -407,8 +454,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
   const notApplicable: Partial<Record<ResultKey, string>> = {};
   if (!plan.scenarios.length) notApplicable.scenarioComparison = 'No scenarios yet';
   if (!plan.lifeEvents.some(event => event.type === 'income' || event.type === 'windfall')) notApplicable.eventImpacts = 'No income changes or windfalls';
-  if (!plan.loans.some(isDirectLoan)) notApplicable.federalLimits = 'No federal loans';
-  if (!fundedDirect) notApplicable.federalPlans = 'No federal loans with a balance';
+  if (payoffTarget?.mode !== 'target') notApplicable.targetPayment = 'No payoff target chosen';
   if (!years.some(year => year.resources.some(resource => resource.type === 'job'))) notApplicable.schoolEarnings = 'No earnings entered';
 
   const matching = (key: ResultKey, severity: ReadinessSeverity) =>
@@ -433,7 +479,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
     if (nonPayoff && nonPayoff.blocks.includes(key)) {
       results[key] = {
         state: 'nonPayoff', itemIds: [nonPayoff.id],
-        summary: repayment?.status === 'notAmortizing' ? 'Not paid off: payments don\'t cover interest' : `Not paid off within ${plan.repayment.maxMonths ?? 600} months`,
+        summary: repayment?.status === 'notAmortizing' ? 'Not paid off: payments don\'t cover interest' : 'Not paid off within the modeled limit (100 years)',
       };
       continue;
     }
@@ -466,7 +512,7 @@ function needsSummary(item: ReadinessItem): string {
 function estimateSummary(item: ReadinessItem): string {
   if (item.id === 'budget.default') return 'Estimate: uses the default monthly budget';
   if (item.id === 'salary.baseline') return 'Estimate: uses the default starting salary';
-  if (item.id === 'federal.agiDefault') return 'Estimate: uses the default AGI';
+  if (item.id.endsWith('.requiredPaymentUnset')) return 'Estimate: a private loan\'s payment start is not set';
   return 'Estimate';
 }
 

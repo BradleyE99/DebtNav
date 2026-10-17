@@ -47,9 +47,18 @@ describe('validatePlannerPlan', () => {
     ['blank money', (p: PlannerPlan) => { p.postGradIncome.monthlyDebtBudget = ''; }, 'postGradIncome.monthlyDebtBudget'],
     ['exponent money', (p: PlannerPlan) => { p.postGradIncome.monthlyDebtBudget = '1e3'; }, 'postGradIncome.monthlyDebtBudget'],
     ['rate above 30%', (p: PlannerPlan) => { p.loans[0].annualRate = '0.31'; }, 'loans.loan-a.annualRate'],
-    ['grace above 12', (p: PlannerPlan) => { p.settings.graceMonths = 13; }, 'settings.graceMonths'],
+    ['voluntary start above 60 months', (p: PlannerPlan) => { p.repayment.voluntaryStart = { kind: 'afterGraduation', months: 61 }; }, 'repayment.voluntaryStart.months'],
+    ['voluntary start with a bad date', (p: PlannerPlan) => { p.repayment.voluntaryStart = { kind: 'date', date: '2031-02-30' }; }, 'repayment.voluntaryStart.date'],
+    ['unknown voluntary start kind', (p: PlannerPlan) => { (p.repayment as any).voluntaryStart = { kind: 'soon' }; }, 'repayment.voluntaryStart.kind'],
+    ['loan grace above 60', (p: PlannerPlan) => { p.loans[0].requiredPayment = { graceMonths: 61 }; }, 'loans.loan-a.requiredPayment.graceMonths'],
+    ['first due date on the disbursement date', (p: PlannerPlan) => { p.loans[0].requiredPayment = { firstDueDate: p.loans[0].disbursementDate }; }, 'loans.loan-a.requiredPayment.firstDueDate'],
+    ['in-school payments as text', (p: PlannerPlan) => { p.loans[0].requiredPayment = { inSchoolPayments: 'yes' as unknown as boolean }; }, 'loans.loan-a.requiredPayment.inSchoolPayments'],
+    ['take-home pay with three decimals', (p: PlannerPlan) => { p.postGradIncome.monthlyTakeHome = '1.001'; }, 'postGradIncome.monthlyTakeHome'],
+    ['negative expenses', (p: PlannerPlan) => { p.postGradIncome.monthlyExpenses = '-1.00'; }, 'postGradIncome.monthlyExpenses'],
     ['term 0', (p: PlannerPlan) => { p.loans[0].termMonths = 0; }, 'loans.loan-a.termMonths'],
-    ['horizon 1201', (p: PlannerPlan) => { p.repayment.maxMonths = 1201; }, 'repayment.maxMonths'],
+    ['payoff target of 1201 months', (p: PlannerPlan) => { p.repayment.payoffTarget = { mode: 'target', kind: 'duration', months: 1201 }; }, 'repayment.payoffTarget.months'],
+    ['payoff target with a bad date', (p: PlannerPlan) => { p.repayment.payoffTarget = { mode: 'target', kind: 'date', date: 'soon' }; }, 'repayment.payoffTarget.date'],
+    ['unknown payoff mode', (p: PlannerPlan) => { (p.repayment as any).payoffTarget = { mode: 'magic' }; }, 'repayment.payoffTarget.mode'],
     ['family size 21', (p: PlannerPlan) => { p.repayment.familySize = 21; }, 'repayment.familySize'],
     ['blank name', (p: PlannerPlan) => { p.loans[0].name = '  '; }, 'loans.loan-a.name'],
     ['long name', (p: PlannerPlan) => { p.loans[0].name = 'x'.repeat(201); }, 'loans.loan-a.name'],
@@ -82,6 +91,8 @@ describe('validatePlannerPlan', () => {
   it('rejects a loan disbursed after repayment starts at the loan field (review M1)', () => {
     const plan = planWithRecords();
     plan.loans[1].disbursementDate = '2040-01-01';
+    // US-507: checked against the loan's own repayment period (a private loan needs configured terms).
+    plan.loans[1].requiredPayment = { graceMonths: 6 };
     const result = validatePlannerPlan(plan);
     expect(result).toMatchObject({ ok: false, errors: [{ path: 'loans.loan-b.disbursementDate', message: 'Disbursement must be on or before repayment start (2030-11-20).' }] });
     plan.loans[1].disbursementDate = '2030-11-20';
@@ -111,7 +122,7 @@ describe('validatePlannerPlan', () => {
       ['constructor segment', { 'loans.constructor.principal': '1' }],
       ['prototype segment', { 'prototype.x': '1' }],
       ['object value', { 'postGradIncome.annualSalary': {} as unknown as string }],
-      ['wrong type for target', { 'settings.graceMonths': '3' }],
+      ['wrong type for target', { 'repayment.voluntaryStart.months': '3' }],
       ['invalid effective value', { 'postGradIncome.monthlyDebtBudget': '-1' }],
       ['effective dates out of range', { 'settings.graduationDate': '9999-12-31' }],
     ])('rejects %s', (_name, overrides) => {

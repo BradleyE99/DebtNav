@@ -125,10 +125,11 @@ function YearCard({ year, index, previous, summary, onLoanCreated }: YearCardPro
           <dl className="gap-figures">
             <div><dt>Cost of attendance</dt><dd>{formatCurrency(summary.costs)}</dd></div>
             <div><dt>Resources</dt><dd>{formatCurrency(summary.resources)}</dd></div>
-            <div className="gap-main"><dt>Borrowing gap <span className="subtle">(a calculation, not a recommendation)</span></dt><dd>{noCosts ? <span className="placeholder">Needs costs</span> : formatCurrency(summary.gap)}</dd></div>
+            <div className="gap-main"><dt>Funding gap <span className="subtle">(a calculation, not a recommendation)</span></dt><dd>{noCosts ? <span className="placeholder">Needs costs</span> : formatCurrency(summary.gap)}</dd></div>
+            <div><dt>Loans already allocated to this year</dt><dd>{formatCurrency(summary.borrowed)}</dd></div>
+            <div className="gap-remaining"><dt>Remaining unfunded</dt><dd>{noCosts ? <span className="placeholder">Needs costs</span> : formatCurrency(summary.remaining)}</dd></div>
             {isPositive(summary.surplus) && <div><dt>Surplus (resources beyond costs)</dt><dd>{formatCurrency(summary.surplus)}</dd></div>}
             <div><dt>Gap + your buffer</dt><dd>{formatCurrency(summary.bufferedGap)}</dd></div>
-            <div><dt>Already borrowed for this year</dt><dd>{formatCurrency(summary.borrowed)}</dd></div>
           </dl>
         ) : <p>Totals appear when every amount in your plan is valid.</p>}
         <PercentField id={`schoolYears.${year.id}.bufferPercent`} label="Borrowing buffer" hint="Extra cushion on top of the gap, 0–100%." max="100"
@@ -140,7 +141,8 @@ function YearCard({ year, index, previous, summary, onLoanCreated }: YearCardPro
         <Explain>
           <p>Cost of attendance = sum of all cost items (whole-year and semester entries) + school expense events for this year.</p>
           <p>Resources = Σ resource amount × (1 − unavailable % ÷ 100) + school aid events. Hourly job income = wage × hours per week × weeks worked.</p>
-          <p>Gap = max(0, cost − resources). Surplus = max(0, resources − cost), shown separately. Gap + buffer = gap × (1 + buffer % ÷ 100), rounded to cents.</p>
+          <p>Funding gap = max(0, cost − resources). Resources never include loans. Surplus = max(0, resources − cost), shown separately.</p>
+          <p>Loans already allocated = principal of the loans assigned to this academic year. Remaining unfunded = max(0, funding gap − loans already allocated). Gap + buffer = gap × (1 + buffer % ÷ 100), rounded to cents; the buffer is optional extra cushion and is not part of the remaining amount.</p>
         </Explain>
       </div>
 
@@ -226,13 +228,12 @@ function ResourceRow({ yearId, resource, onRemove }: { yearId: string; resource:
 }
 
 function CopyForward({ year, previous, index }: { year: PlannerYear; previous: PlannerYear; index: number }) {
-  const { update, store } = usePlanner();
+  const { update } = usePlanner();
   const [increase, setIncrease] = useState('0');
   const [message, setMessage] = useState<string | null>(null);
   const id = `copy-${year.id}-increase`;
   function copy() {
-    if (year.costItems.length) store.markUndoable(`Copy Year ${index} costs into Year ${index + 1}`);
-    const result = update(p => copyYearCosts(p, previous.id, year.id, increase));
+    const result = update(p => copyYearCosts(p, previous.id, year.id, increase), `Copy Year ${index} costs into Year ${index + 1}`);
     setMessage(result.ok
       ? `Copied ${previous.costItems.length} cost item${previous.costItems.length === 1 ? '' : 's'} from Year ${index} with a ${increase}% increase.`
       : result.errors[0]?.message ?? 'Could not copy costs.');

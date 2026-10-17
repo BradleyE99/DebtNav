@@ -1,12 +1,11 @@
-import { createContext, useContext, useDeferredValue, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useDeferredValue, useMemo, useState, type ReactNode } from 'react';
 import type {
-  FieldError, PlannerPlan, PlannerStore, Result,
+  FieldError, ISODate, PlannerPlan, PlannerStore, Result, TargetPaymentOutput,
 } from '../engine/planner-contracts';
 import { calculatePlannerOutputs } from '../engine/planner';
 import type { PlannerComparisonsDetailed, PlannerOutputs, RepaymentUnavailable } from '../engine/planner';
 import { pruneDanglingReferences } from '../engine/paths';
 import { useSecondaryResults } from './derived/useSecondaryResults';
-import type { IbrEstimate, RapEstimate, TieredEstimate } from './derived/secondary';
 import { getPlanReadiness, type PlanReadiness } from '../data/readiness';
 import { DraftRegistryProvider, useDraftRegistryState } from './fields/draftRegistry';
 
@@ -27,14 +26,17 @@ export interface PlannerApi {
   projectionUpdating: boolean;
   /** Secondary results computed off the main thread (Web Worker) so typing stays responsive. */
   comparisons: PlannerComparisonsDetailed | null;
-  /** Federal repayment plan models for the same plan as `comparisons`. */
-  federal: { rap: RapEstimate | null; rapError: string | null; ibr: IbrEstimate | null; tiered: TieredEstimate | null } | null;
-  /** True while comparisons/federal models are being recalculated for the latest plan. */
+  /** US-506 payoff-target solver result (worker); null in budget mode or before the first result arrives. */
+  target: TargetPaymentOutput;
+  /** True while comparisons and the target result are being recalculated for the latest plan. */
   comparisonsUpdating: boolean;
+  /** Today's UTC date, fixed for this session; passed to the target solver. */
+  today: ISODate;
   /** What can be calculated, what is missing/invalid, and which results are estimates (one shared call). */
   readiness: PlanReadiness;
-  update(edit: (plan: PlannerPlan) => PlannerPlan): Result<PlannerPlan>;
-  /** Destructive edit: records an undo point, applies the edit, then prunes dangling references. */
+  /** Applies an edit; every committed edit becomes an undo history entry (label defaults to the store's "Edit"). */
+  update(edit: (plan: PlannerPlan) => PlannerPlan, undoLabel?: string): Result<PlannerPlan>;
+  /** Destructive edit: labeled undo entry, applies the edit, then prunes dangling references. */
   remove(label: string, edit: (plan: PlannerPlan) => PlannerPlan): Result<PlannerPlan>;
 }
 
@@ -44,7 +46,9 @@ export function PlannerProvider({ store, children }: { store: PlannerStore; chil
   const plan = store.document.plan;
   const projectedPlan = useDeferredValue(plan);
   const result = useMemo(() => calculatePlannerOutputs(projectedPlan), [projectedPlan]);
-  const { results: secondary, updating: secondaryUpdating } = useSecondaryResults(plan);
+  const [today] = useState(() => new Date().toISOString().slice(0, 10));
+  const { results: secondary, updating: secondaryUpdating } = useSecondaryResults(plan, today);
+  const target = secondary?.target ?? null;
 
   const { registry: drafts, invalidFieldIds } = useDraftRegistryState();
 
@@ -55,8 +59,9 @@ export function PlannerProvider({ store, children }: { store: PlannerStore; chil
     outputs: result.ok ? result.value : null,
     projectionErrors: result.ok ? result.value.repaymentUnavailable?.errors ?? [] : result.errors,
     comparisons: comparisonsValue,
+    target: secondary ? target : undefined,
     invalidFieldIds,
-  }), [projectedPlan, result, comparisonsValue, invalidFieldIds]);
+  }), [projectedPlan, result, comparisonsValue, invalidFieldIds, secondary, target]);
 
   const api = useMemo<PlannerApi>(() => {
     const comparisons = secondary?.comparisons;
@@ -69,15 +74,18 @@ export function PlannerProvider({ store, children }: { store: PlannerStore; chil
       repaymentUnavailable: result.ok ? result.value.repaymentUnavailable : null,
       projectionUpdating: projectedPlan !== plan,
       comparisons: comparisons?.ok ? comparisons.value : null,
-      federal: secondary ? { rap: secondary.rap, rapError: secondary.rapError, ibr: secondary.ibr, tiered: secondary.tiered } : null,
+      target,
+      today,
       comparisonsUpdating: secondaryUpdating,
-      update: edit => store.updatePlan(edit),
+      // Field edits commit per keystroke: a burst with the same label is one undo step (removals never merge).
+      update: (edit, undoLabel) => store.updatePlan(edit, undoLabel ? { undoLabel, coalesce: true } : undefined),
       remove: (label, edit) => {
-        store.markUndoable(label);
-        return store.updatePlan(current => pruneDanglingReferences(edit(current)));
+        // Stores without an undo history (pre-v2) only record edits announced with markUndoable.
+        if (!store.history) store.markUndoable(label);
+        return store.updatePlan(current => pruneDanglingReferences(edit(current)), { undoLabel: label });
       },
     };
-  }, [store, plan, result, projectedPlan, secondary, secondaryUpdating, readiness]);
+  }, [store, plan, result, projectedPlan, secondary, secondaryUpdating, readiness, target, today]);
 
   return (
     <PlannerContext.Provider value={api}>

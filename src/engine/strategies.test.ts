@@ -111,7 +111,6 @@ describe('US-604 avalanche interest invariant', () => {
   it('holds (within cent rounding) for capitalized loans whenever the budget covers the minimums', () => {
     fc.assert(fc.property(fc.array(loanArbitrary, { minLength: 2, maxLength: 5 }), fc.integer({ min: 0, max: 200_000 }), fc.array(fc.nat(), { maxLength: 5 }), (loans, extraCents, shuffle) => {
       const plan = createDefaultPlan();
-      plan.repayment.maxMonths = 1200;
       plan.loans = loans.map((item, i) => loan(`l${i}`, String(item.principal), new D(item.rateBasisPoints).div(10000).toString(), {
         termMonths: item.term, type: item.subsidized ? 'subsidized' : 'unsubsidized', disbursementDate: '2028-01-01',
       }));

@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+import { test, expect, openPlanner } from './support/fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 // Loan academic years and "Group by academic year", exercised with real mouse and keyboard input in Chromium.
@@ -47,11 +48,9 @@ async function addLoan(page: Page, name: string, principal: string) {
   return card;
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-  await page.getByRole('button', { name: 'I understand' }).click();
+// Every test signs in as a fresh account (empty plan) through the real OIDC flow.
+test.beforeEach(async ({ page, user }) => {
+  await openPlanner(page, user);
   await navigate(page, 'loans');
 });
 

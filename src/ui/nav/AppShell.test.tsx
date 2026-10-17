@@ -145,7 +145,7 @@ describe('desktop sidebar', () => {
       window.history.pushState(null, '', '#repayment');
       window.dispatchEvent(new HashChangeEvent('hashchange'));
     });
-    expect(link('Repayment').getAttribute('aria-current')).toBe('page');
+    expect(link('Repayment Plan').getAttribute('aria-current')).toBe('page');
     act(() => {
       window.history.replaceState(null, '', '#school');
       window.dispatchEvent(new PopStateEvent('popstate'));

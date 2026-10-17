@@ -96,3 +96,9 @@
 .loan-academic-year__add { margin-top: 10px; padding: 12px; background: var(--canvas); border: 1px dashed var(--line-strong); border-radius: 8px; }
 .loan-academic-year__add input { max-width: 8rem; }
 .loan-academic-year__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+/* US-507 required-payment terms inside an open loan card. */
+.loan-required-payment { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px 12px; margin: 14px 0; min-width: 0; }
+.loan-required-payment legend { font-weight: 600; padding: 0 4px; }
+.loan-required-payment__summary { margin: 2px 0 10px; overflow-wrap: anywhere; }
+.loan-required-payment__federal { grid-column: 1 / -1; }
