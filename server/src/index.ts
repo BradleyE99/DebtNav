@@ -1,12 +1,17 @@
 /** Server entry point: `npm run dev:api` (watch) or `npm start`. Applies migrations at startup. */
 import { serve } from '@hono/node-server';
 import { createApp } from './app';
-import { loadConfig, oidcConfigured } from './config';
+import { loadConfig, oidcConfigured, startupProblem } from './config';
 import { openDb } from './db';
 import { migrate } from './migrate';
 import { purgeExpired } from './auth/session';
 
 const config = loadConfig();
+const problem = startupProblem(config);
+if (problem) {
+  console.error(`[config] ${problem}`);
+  process.exit(1);
+}
 const db = await openDb(config);
 const applied = await migrate(db);
 if (applied.length) console.log(`[db] applied migrations: ${applied.join(', ')}`);

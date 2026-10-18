@@ -47,7 +47,7 @@ If you already created a web service by hand (the one whose deploy failed), dele
    - `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` = from step 2
 4. **Manual Deploy → Deploy latest commit.**
 
-Without `DATABASE_URL`, the server falls back to an embedded database inside the container, and Render erases it on every deploy or restart. Always connect Postgres on Render.
+`DATABASE_URL` is required. Without it the server stops at startup with `[config] DATABASE_URL is not set…`, because the embedded fallback database needs about 700 MB of memory (more than the 512 MB of Free and Starter instances) and Render erases it on every deploy or restart. With Postgres the server uses about 110–130 MB.
 
 ## 4. Check that it works
 
@@ -69,6 +69,8 @@ Without `DATABASE_URL`, the server falls back to an embedded database inside the
 | The app shows "Sign-in is not set up" | `OIDC_CLIENT_ID` or `OIDC_CLIENT_SECRET` is empty on the service. Add both and redeploy. |
 | Signed in, but "Sign-in didn't work" right away | The secret is wrong or the client ID belongs to another project. Re-copy both from the same OAuth client. |
 | `/api/health` shows `db: unavailable` | `DATABASE_URL` is wrong, or the database is in a different region. Use the Internal Database URL from a database in the same region. |
+| Deploy fails with **Ran out of memory (used over 512MB)** | The service had no `DATABASE_URL`, so the server loaded the embedded database (~700 MB). Fixed: the server now refuses to start without `DATABASE_URL`. Create the Postgres database and set `DATABASE_URL` (Option A does this for you). |
+| Logs show `[config] DATABASE_URL is not set` and the deploy fails | Same cause, reported clearly: add `DATABASE_URL` (the database's **Internal Database URL**) under **Environment**, then redeploy. |
 | First request after a while takes ~50 s | The free web plan sleeps when idle. Use Starter (`0.5c-512mb`) for an always-on app. |
 
 ## Custom domain (optional)

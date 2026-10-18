@@ -8,6 +8,8 @@ export interface ServerConfig {
   /** Public origin of the app (scheme://host[:port]); the OIDC redirect URI is `${appOrigin}/api/auth/callback`. */
   appOrigin: string;
   database: { kind: 'postgres'; url: string } | { kind: 'pglite'; dir: string | null };
+  /** Embedded PGlite in production only when ALLOW_EMBEDDED_DB=1 (see startupProblem). */
+  allowEmbeddedDb: boolean;
   oidc: {
     issuer: string;
     clientId: string | null;
@@ -52,6 +54,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     database: env.DATABASE_URL
       ? { kind: 'postgres', url: env.DATABASE_URL }
       : { kind: 'pglite', dir: memory ? null : (env.PGLITE_DIR || '.data/pglite') },
+    allowEmbeddedDb: !production || flag(env.ALLOW_EMBEDDED_DB),
     oidc: {
       issuer: env.OIDC_ISSUER || 'https://accounts.google.com',
       clientId: env.OIDC_CLIENT_ID || null,
@@ -72,3 +75,18 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 }
 
 export const oidcConfigured = (config: ServerConfig): boolean => Boolean(config.oidc.clientId && config.oidc.clientSecret);
+
+/**
+ * A configuration the server must refuse to start with, or null. In production the embedded database
+ * (PGlite) is refused unless explicitly allowed: it needs ~700 MB of memory (more than small hosts such as
+ * Render's 512 MB instances) and a host's container disk is erased on every deploy or restart, so saved
+ * plans would be lost. Production uses PostgreSQL through DATABASE_URL.
+ */
+export function startupProblem(config: ServerConfig): string | null {
+  if (config.production && config.database.kind === 'pglite' && !config.allowEmbeddedDb) {
+    return 'DATABASE_URL is not set. In production DebtNav needs a PostgreSQL database: create one (on Render: New → Postgres, '
+      + 'or use the render.yaml Blueprint) and set DATABASE_URL to its connection string. See docs/DEPLOY-RENDER.md. '
+      + '(To run a throwaway trial with the embedded database anyway, set ALLOW_EMBEDDED_DB=1; it needs ~700 MB of memory and loses data on restart.)';
+  }
+  return null;
+}
