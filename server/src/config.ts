@@ -36,7 +36,8 @@ const int = (value: string | undefined, fallback: number, min: number, max: numb
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): ServerConfig {
   const production = env.NODE_ENV === 'production';
-  const appOrigin = (env.APP_ORIGIN || 'http://localhost:5173').replace(/\/+$/, '');
+  // Render sets RENDER_EXTERNAL_URL (https://<service>.onrender.com); an explicit APP_ORIGIN (e.g. a custom domain) wins.
+  const appOrigin = (env.APP_ORIGIN || env.RENDER_EXTERNAL_URL || 'http://localhost:5173').replace(/\/+$/, '');
   const secure = production || appOrigin.startsWith('https://');
   const memory = flag(env.PGLITE_MEMORY) || env.PGLITE_DIR === 'memory://';
   const warnings: string[] = [];
