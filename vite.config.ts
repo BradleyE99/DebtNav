@@ -5,7 +5,8 @@ export default defineConfig({
   server: { proxy: { '/api': api } },
   preview: { proxy: { '/api': api } },
   test: {
-    testTimeout: 15000,
+    // Shared CI runners (and coverage instrumentation) are slower; property tests need the headroom there.
+    testTimeout: process.env.CI ? 60_000 : 15_000,
     include: ['src/**/*.test.{ts,tsx}', 'server/**/*.test.ts'],
     coverage: {
       provider: 'v8',

@@ -248,6 +248,9 @@ function buildPlan(input: PlanInput): PlannerPlan {
   return plan;
 }
 
+// Property runs simulate many full projections; coverage instrumentation and shared CI runners slow them down.
+const PROPERTY_TIMEOUT_MS = 60_000;
+
 describe('NFR-3 / NFR-11 properties (fast-check)', () => {
   it('never throws or fails for valid plans, never goes negative, and conserves principal when paid off', () => {
     fc.assert(fc.property(planArb, input => {
@@ -276,7 +279,7 @@ describe('NFR-3 / NFR-11 properties (fast-check)', () => {
         }
       }
     }), { numRuns: 120 });
-  });
+  }, PROPERTY_TIMEOUT_MS);
 
   it('more extra payment never means more months (monotonicity)', () => {
     fc.assert(fc.property(fc.array(loanArb, { minLength: 1, maxLength: 4 }), moneyArb(200_000), fc.integer({ min: 1, max: 50_000 }), (loans, extra, more) => {
@@ -290,7 +293,7 @@ describe('NFR-3 / NFR-11 properties (fast-check)', () => {
         expect(second.amortizationSchedule.length).toBeLessThanOrEqual(first.amortizationSchedule.length);
       }
     }), { numRuns: 120 });
-  });
+  }, PROPERTY_TIMEOUT_MS);
 
   it('a scenario with no overrides always equals the base projection', () => {
     fc.assert(fc.property(planArb, input => {
@@ -299,5 +302,5 @@ describe('NFR-3 / NFR-11 properties (fast-check)', () => {
       const result = compare(plan);
       expect(result.scenarioComparisons[0].projection).toEqual(project(plan).repayment);
     }), { numRuns: 60 });
-  });
+  }, PROPERTY_TIMEOUT_MS);
 });

@@ -1,0 +1,34 @@
+# Render Blueprint for DebtNav (docs/DEPLOY-RENDER.md). Creates one Docker web service (the API serving the
+# built app) and a private Postgres database in the same region. Spec: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: debtnav
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # 0.5c-512mb = Starter ($7/mo, always on). Use `free` to try it out: it sleeps when idle.
+    plan: 0.5c-512mb
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # The public URL (https://<name>.onrender.com) comes from Render's RENDER_EXTERNAL_URL automatically.
+      # Set APP_ORIGIN only when you add a custom domain.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: debtnav-db
+          property: connectionString
+      # Google OAuth credentials: Render asks for these when the Blueprint is first created.
+      - key: OIDC_CLIENT_ID
+        sync: false
+      - key: OIDC_CLIENT_SECRET
+        sync: false
+
+databases:
+  - name: debtnav-db
+    databaseName: debtnav
+    user: debtnav
+    # 0.1c-256mb = smallest paid Postgres. `free` works for a trial but Render deletes free databases after 30 days.
+    plan: 0.1c-256mb
+    postgresMajorVersion: "17"
+    # No public access: only services in this Render account (over the private network) can connect.
+    ipAllowList: []

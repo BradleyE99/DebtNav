@@ -49,6 +49,8 @@ The tables are in `server/migrations/001_init.sql`: `users`, `sessions`, `plans`
 
 ## Deployment
 
+**Render:** follow [DEPLOY-RENDER.md](DEPLOY-RENDER.md). The repo's `render.yaml` Blueprint creates the web service and a private Postgres database, and the server reads Render's `RENDER_EXTERNAL_URL`, so `APP_ORIGIN` is only needed for a custom domain.
+
 The repository includes deployment artifacts but nothing has been deployed: no infrastructure has been provisioned, purchased or published. To deploy you need:
 
 1. **A managed PostgreSQL 15+** database (for example Neon, Supabase, Render, RDS or Cloud SQL) with TLS, and `DATABASE_URL` set with `sslmode=require`. The role needs DDL rights for migrations and must have `gen_random_uuid()` available (built into PostgreSQL 13+). Database credentials live only on the server.

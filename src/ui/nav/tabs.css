@@ -24,6 +24,8 @@
   /* The short label replaces the long one visually; the full label stays the accessible name. */
   .tab-label:not(.tab-label--short) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .tab-label--short { display: inline; }
+  /* The four tabs share the row equally, so wider fallback fonts shrink the padding instead of overflowing. */
   .tabs ul { gap: 0; }
-  .tab { padding: 8px 9px; }
+  .tabs li { flex: 1 1 0; min-width: 0; }
+  .tab { padding: 8px 4px; justify-content: center; }
 }
