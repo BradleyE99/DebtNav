@@ -102,3 +102,8 @@
 .loan-required-payment legend { font-weight: 600; padding: 0 4px; }
 .loan-required-payment__summary { margin: 2px 0 10px; overflow-wrap: anywhere; }
 .loan-required-payment__federal { grid-column: 1 / -1; }
+
+/* Advanced loan terms (collapsed by default). */
+.loan-card__advanced { margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.loan-card__advanced > summary { cursor: pointer; color: var(--accent); font-weight: 600; min-height: 28px; }
+.loan-card__advanced > summary .subtle { font-weight: 500; margin-left: 6px; }

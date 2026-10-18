@@ -5,14 +5,9 @@
  */
 import type { Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { test, expect, seedPlan, getPlan } from './support/fixtures';
+import { test, expect, goTo, seedPlan, getPlan } from './support/fixtures';
 
-async function go(page: Page, id: string) {
-  const menu = page.getByRole('button', { name: 'Menu', exact: true });
-  if (await menu.isVisible()) await menu.click();
-  await page.locator('nav a[href="#' + id + '"]').click();
-  await expect(page.locator('.dashboard')).toHaveAttribute('data-dashboard', id);
-}
+const go = goTo;
 const loan = (id: string, principal: string, annualRate: string, extra: Record<string, unknown> = {}) => ({
   id, name: `Loan ${id}`, type: 'unsubsidized', principal, annualRate, disbursementDate: '2030-11-20', termMonths: 120, academicYear: 'unassigned', ...extra,
 });
@@ -31,7 +26,7 @@ async function seedTarget(page: Page, loans: unknown[], months: number, budget =
 test('$12,000 at 0% within 1 year requires exactly $1,000.00 and the chosen budget is unchanged', async ({ signedIn: page }) => {
   await seedTarget(page, [loan('z', '12000.00', '0')], 12);
   await expect(metric(page, 'Required monthly payment')).toHaveText('$1,000.00');
-  await expect(metric(page, 'Your chosen budget')).toHaveText('$400.00');
+  await expect(metric(page, 'Your monthly payment')).toHaveText('$400.00');
   await expect(page.locator('.target-result')).toContainText(/Nov(ember)? 2031/);
   expect(((await getPlan(page.request)).document!.plan.postGradIncome as { monthlyDebtBudget: string }).monthlyDebtBudget).toBe('400.00');
   expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()).violations.map(v => v.id)).toEqual([]);
@@ -60,7 +55,7 @@ test('interest-bearing and multi-loan targets match the independent reference', 
 
 test('using the required payment is explicit and undoable', async ({ signedIn: page }) => {
   await seedTarget(page, [loan('z', '12000.00', '0')], 12);
-  await page.getByRole('button', { name: 'Use $1,000.00 as my monthly budget' }).click();
+  await page.getByRole('button', { name: 'Use $1,000.00 as my monthly payment' }).click();
   await expect.poll(async () => ((await getPlan(page.request)).document!.plan.postGradIncome as { monthlyDebtBudget: string }).monthlyDebtBudget).toBe('1000.00');
   await page.getByRole('group', { name: 'Undo' }).getByRole('button', { name: 'Undo', exact: true }).click();
   await expect.poll(async () => ((await getPlan(page.request)).document!.plan.postGradIncome as { monthlyDebtBudget: string }).monthlyDebtBudget).toBe('400.00');
@@ -82,7 +77,7 @@ test('a late voluntary start shows required dates and a missed-payment warning i
     plan.repayment.voluntaryStart = { kind: 'afterGraduation', months: 9 };
     plan.repayment.payoffTarget = { mode: 'budget' };
   });
-  await go(page, 'results');
+  await go(page, 'repayment'); // Results with every section open (Repayment start lists the required dates)
   await expect(page.getByRole('alert').filter({ hasText: 'Required payments come before your first payment.' })).toBeVisible();
   await expect(page.locator('main')).toContainText(/Dec(ember)? 20, 2030|2030-12-20|12\/20\/2030/);
 });

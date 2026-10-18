@@ -10,7 +10,7 @@ Author: Bradley J. Elder · Version 0.2 (Draft) · Date October 16, 2026 · Stat
 ### 1.1 Problem statement
 Self-funded students can't easily see how today's borrowing, income, and aid decisions affect when they'll be debt-free. Existing tools split "how much to borrow" and "how fast can I repay" into separate calculators and force users to recalculate from scratch whenever their situation changes.
 ### 1.2 Product vision
-Two connected, independently usable workflows: calculate annual borrowing needs; project repayment duration from loans and a chosen payment budget informed by earnings. Overview introduces these workflows; Results presents calculations and missing-input guidance.
+DebtNav answers two questions: (1) how much do I need to borrow for college? (2) when will I be debt-free given my loans, earnings and chosen payments? It has four primary destinations: Introduction (sign-in), College Costs, Loan Amounts and Results. Results is the single place to understand and adjust repayment (see §14, which supersedes earlier navigation requirements).
 ### 1.3 Goals
 - G1: Easily calculate annual school costs minus non-loan resources, loan funding already allocated, and additional funding still needed.
 - G2: Easily calculate repayment duration, debt-free date, and interest from loans and the chosen monthly payment.
@@ -204,7 +204,8 @@ Implements revised US-102 with separate voluntary start and estimated required-p
 - Briefly describe DebtNav and its two primary tasks: annual borrowing and repayment planning.
 - Clear links/cards to Loans, How much I make, Repayment Plan, Results, and Costs.
 - How much I make opens the appropriate income controls; post-graduation earnings live in Repayment Plan. In-school earnings remain tied to school-year resources.
-- Overview does not duplicate Results charts/tables. Preserve the retractable sidebar and separate dashboards.
+- Overview does not duplicate Results charts/tables.
+- *Superseded by §14 (US-1301):* the Overview becomes the Introduction destination; the sidebar and separate dashboards for income, repayment, events, scenarios, federal and data are replaced by four tabs.
 
 ### US-904: Persistent undo (Must)
 - Undo controls do not disappear after five seconds or any automatic timer.
@@ -214,6 +215,7 @@ Implements revised US-102 with separate voluntary start and estimated required-p
 - Import replacement can be undone in the active session. Account deletion remains explicitly confirmed and is not represented as reversible.
 
 ### US-905: Federal placeholder (Must)
+*Superseded by §14 (US-1301): the Federal page is removed from the interface; stored federal data and federal loan types remain.*
 - Federal dashboard displays only Coming soon; existing federal controls, calculators and reference tables removed from that page.
 - Do not delete stored federal loan records or remove federal loan types/general calculations.
 - Defer US-405 and US-1102; no new federal integrations in this release.
@@ -264,3 +266,38 @@ Implements revised US-102 with separate voluntary start and estimated required-p
 
 ### Updated domain and operational constraints
 Plan adds academic-year references, repaymentPlan (earnings, selected budget, target payoff and voluntary start), and per-loan required-payment settings. Account ownership is enforced by the server and excluded from portable files. Database amounts use exact numeric/decimal or documented lossless strings; dates use explicit calendar-date semantics. Target payment solving must not block the UI; benchmark it separately from ordinary projection recalculation. Network saves may be debounced; show unsaved state and flush appropriately. Authenticated API validation, rate/file-size limits, secret handling, and error reporting without financial inputs in logs.
+
+## 14. October 17 simplification: four destinations (supersedes conflicting navigation requirements)
+DebtNav is refocused on borrowing needs and the debt-free date. This section supersedes the retractable-sidebar and separate-dashboard requirements in US-903, the Federal dashboard in US-905, and any requirement that places income, repayment, life-event, scenario or data screens in primary navigation. Calculation, persistence, authentication, import/export and undo requirements are unchanged. No stored data is removed because its screen is hidden.
+
+### US-1301: Four primary destinations (Must)
+- Primary navigation has exactly four items: Introduction, College Costs, Loan Amounts, Results.
+- Old links (`#setup`, `#income`, `#repayment`, `#events`, `#scenarios`, `#federal`, `#data`) land on the destination that now holds those inputs.
+- Export/import (JSON and Excel), template, data deletion, undo history, the disclaimer and sign-out are in a compact account menu, not a fifth destination. Undo stays persistent and keyboard accessible.
+- Scenarios, federal settings, custom payoff order, extra payment and all life events stay stored, exported and imported even when their screens are hidden.
+- Short labels, at most one line of helper text per field, progressive disclosure; no setup wizard. Works with keyboard, at 360 px and at 200% zoom without horizontal scrolling.
+
+### US-1302: Introduction (Must)
+- Public page: one-sentence description of the two questions and Sign in with Google.
+- Signed in: short introduction and a clear action to start or resume the plan. No detailed results or calculations.
+
+### US-1303: College Costs (Must)
+- Academic-year selector (e.g. 2026–2027) instead of stacking every year; school start and graduation dates editable here.
+- Costs, grants/scholarships/savings/other non-loan resources, in-school earnings that count toward that year, and one-time aid or cost changes for that year.
+- Shows total cost, non-loan resources, funding gap = max(0, cost − resources), loans allocated to the year, and remaining unfunded = max(0, gap − allocated). Surplus is shown separately; the funding gap and the additional borrowing still needed stay distinct.
+
+### US-1304: Loan Amounts (Must)
+- Compact expandable loan cards with name, type, principal, rate, disbursement date and academic-year assignment; optional grouping by academic year.
+- Academic-year assignment is separate from the disbursement date used for interest. Required-payment terms and other advanced settings are available without crowding the main form.
+
+### US-1305: Results as the repayment workspace (Must)
+- Headline figures: total modeled debt, chosen monthly payment, projected debt-free date, time until debt-free (from today), total projected interest.
+- Compact expandable sections: post-graduation earnings and amount available for debt; repayment start and required-payment timing; bonuses and one-time extra payments (with the portion applied to debt); dated income changes, raises or job changes (an income change changes debt payments only through a visible allocation rule or a user-chosen payment change); optional payoff target. One source of truth for each input; no duplicate controls elsewhere.
+- Incomplete inputs: a short checklist with direct links to the fields; no misleading zero results or fabricated debt-free date.
+
+### US-1306: Yearly breakdown (Should)
+- "View yearly breakdown" in Results, with a choice of years to display including "Until debt-free".
+- Rows summarise the actual monthly projection (no second calculation). The table says whether years are calendar or repayment years and shows year, starting balance, payments, interest charged, principal reduction and ending balance; bonus payments are shown as part of payments, never added twice; income is shown where useful, labelled gross or take-home.
+- The full table ends at the projected payoff, including a partial final year. Choosing fewer years never changes the calculated payoff. If payoff is not reached within the simulation limit, the table says so and shows the remaining balance instead of a date.
+- The monthly schedule stays available but secondary.
+

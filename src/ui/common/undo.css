@@ -1,11 +1,9 @@
-/* US-904 persistent Undo control + history list. */
-.undo-control { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 6px 12px; margin: 8px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
-.undo-control__undo { gap: 6px; }
-.undo-control__state { flex: 1 1 180px; min-width: 0; font-size: 0.9rem; color: var(--ink-2); overflow-wrap: anywhere; }
-.undo-control__toggle { min-height: 44px; }
-.undo-control__panel { flex-basis: 100%; padding: 4px 0 6px; }
-.undo-control__list { margin: 6px 0 10px; padding-left: 24px; max-height: 240px; overflow-y: auto; }
+/* US-904 persistent Undo button (header) + history list (account menu). */
+.undo-control { display: inline-flex; align-items: center; min-width: 0; }
+.undo-control__undo { gap: 6px; padding: 0.45rem 0.8rem; }
+.undo-control__list { margin: 6px 0 10px; padding-left: 24px; max-height: 300px; overflow-y: auto; }
 .undo-control__list li { padding: 3px 0; overflow-wrap: anywhere; }
 .undo-control__list li[aria-current] { font-weight: 600; }
 .undo-control__list time { margin-left: 8px; }
+@media (max-width: 560px) { .undo-control__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } }
 @media print { .undo-control { display: none !important; } }

@@ -1,30 +1,21 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { dashboardForFieldId, readinessStatusText } from '../data/readiness';
-import { ResultFigure } from './results/Readiness';
 import type { PlannerStore } from '../engine/planner-contracts';
 import { PlannerProvider, usePlanner } from './PlannerContext';
 import { Disclaimer } from './sections/Disclaimer';
-import { SetupSection } from './sections/SetupSection';
 import { SchoolYearsSection } from './sections/SchoolYearsSection';
 import { LoansSection } from './sections/LoansSection';
-import { RepaymentSection } from './sections/RepaymentSection';
-import { EventsSection } from './sections/EventsSection';
-import { ScenariosSection } from './sections/ScenariosSection';
-import { FederalSection } from './sections/FederalSection';
-import { DataSection, SaveStatusBadge } from './sections/DataSection';
+import { DataTools, SaveStatusBadge } from './sections/DataSection';
 import type { AccountInfo, WorkbookApi } from './sections/dataExchange';
 import { ResultsSection } from './results/ResultsSection';
-import { KeyFigures } from './results/KeyFigures';
 import { AppShell } from './nav/AppShell';
-import { NAV_ITEMS } from './nav/navItems';
-import { navigateDashboard, type NavigateDetail } from './nav/navigation';
-import { onRevealRequest } from './reveal';
-import { IncomeSection } from './sections/IncomeSection';
+import { AccountMenu } from './nav/AccountMenu';
+import { NAV_ITEMS, isDashboard } from './nav/navItems';
+import { OPEN_DATA_EVENT, navigateDashboard, resolveDashboard, type NavigateDetail } from './nav/navigation';
+import { onRevealRequest, revealField } from './reveal';
 import { OverviewContent } from './overview/OverviewContent';
-import { UndoHistory } from './common/UndoHistory';
-import { AccountHeader } from './auth/AuthComponents';
-import { formatCurrency, formatDate, formatMonthYear, plural } from './format';
-import { money, sum } from '../engine/money';
+import { UndoHistory, UndoHistoryPanel } from './common/UndoHistory';
+import { Dialog } from './common/Dialog';
 import './planner.css';
 
 export interface PlannerAppProps {
@@ -45,38 +36,71 @@ export default function PlannerApp({ store, account, workbook, devicePlanPrompt 
   );
 }
 
+interface HashTarget { dashboard: string; fieldId?: string; openData?: boolean }
+
+/**
+ * Reads the hash: one of the four destinations, an older page's hash (redirected to its new home with
+ * the matching field revealed) or #data (opens the data dialog on the current page). Legacy hashes are
+ * rewritten in place so Back does not bounce through them.
+ */
+function readHash(current: string): HashTarget {
+  let id = '';
+  try { id = decodeURIComponent(window.location.hash.slice(1)); } catch { /* malformed escape → default */ }
+  const fallback = isDashboard(current) ? current : 'overview';
+  const resolved = id ? resolveDashboard(id) : undefined;
+  if (!resolved) return { dashboard: fallback };
+  const dashboard = resolved.openData ? fallback : resolved.dashboard;
+  if (dashboard !== id) window.history.replaceState(null, '', `#${dashboard}`);
+  return { ...resolved, dashboard };
+}
+
 function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppProps, 'store'>) {
   const { store, plan, readiness } = usePlanner();
-  const dashboardFromHash = () => {
-    const id = window.location.hash.slice(1);
-    return NAV_ITEMS.some(item => item.id === id) ? id : 'overview';
-  };
-  const [activeDashboard, setActiveDashboard] = useState(dashboardFromHash);
-  const [requestedFieldId, setRequestedFieldId] = useState<string>();
+  const [initial] = useState(() => readHash(''));
+  const [activeDashboard, setActiveDashboard] = useState(initial.dashboard);
+  const [requestedFieldId, setRequestedFieldId] = useState<string | undefined>(initial.fieldId);
   const [navigationVersion, setNavigationVersion] = useState(0);
+  const [dialog, setDialog] = useState<'data' | 'history' | null>(initial.openData ? 'data' : null);
   // Where a readiness action was followed from (`from`) and where it led (`to`). Navigation to another
   // dashboard clears it; the follow-up reveal navigation to the same dashboard keeps it.
   const [returnTo, setReturnTo] = useState<{ from: string; to: string }>();
+  useEffect(() => { if (initial.fieldId) revealField(initial.fieldId); }, [initial]);
   useEffect(() => {
-    const historyChanged = () => { if (window.location.hash === '#main') return; if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); setRequestedFieldId(undefined); setReturnTo(undefined); setActiveDashboard(dashboardFromHash()); setNavigationVersion(version => version + 1); };
+    let current = initial.dashboard;
+    const historyChanged = () => {
+      if (window.location.hash === '#main') return;
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      const next = readHash(current);
+      current = next.dashboard;
+      if (next.openData) setDialog('data');
+      setRequestedFieldId(next.fieldId);
+      setReturnTo(undefined);
+      setActiveDashboard(next.dashboard);
+      setNavigationVersion(version => version + 1);
+      if (next.fieldId) revealField(next.fieldId);
+    };
     const navigation = (event: Event) => {
       const { dashboard, fieldId, returnTo: from } = (event as CustomEvent<NavigateDetail>).detail;
-      if (!NAV_ITEMS.some(item => item.id === dashboard)) return;
+      if (!isDashboard(dashboard)) return;
+      current = dashboard;
       setRequestedFieldId(fieldId);
-      setReturnTo(previous => from && NAV_ITEMS.some(item => item.id === from) ? { from, to: dashboard }
+      setReturnTo(previous => from && isDashboard(from) ? { from, to: dashboard }
         : previous?.to === dashboard ? previous : undefined);
       setActiveDashboard(dashboard);
       setNavigationVersion(version => version + 1);
     };
+    const openData = () => setDialog('data');
     window.addEventListener('hashchange', historyChanged);
     window.addEventListener('popstate', historyChanged);
     window.addEventListener('debt-nav:navigate', navigation);
+    window.addEventListener(OPEN_DATA_EVENT, openData);
     return () => {
       window.removeEventListener('hashchange', historyChanged);
       window.removeEventListener('popstate', historyChanged);
       window.removeEventListener('debt-nav:navigate', navigation);
+      window.removeEventListener(OPEN_DATA_EVENT, openData);
     };
-  }, []);
+  }, [initial]);
   useEffect(() => onRevealRequest(id => {
     // Same field → dashboard routing as the readiness checklist targets (src/data/readiness.ts).
     const dashboard = dashboardForFieldId(plan, id);
@@ -103,30 +127,31 @@ function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppP
       badges={readiness.byDashboard}
       header={(
         <header className="app-header">
-          <div>
-            <h1>DebtNav</h1>
-          </div>
+          <h1>DebtNav</h1>
           <div className="app-header__status">
             <SaveStatusBadge />
-            {account && <AccountHeader email={account.email} onSignOut={() => { void account.onSignOut(); }} />}
+            <UndoHistory store={store} />
+            <AccountMenu
+              email={account?.email}
+              signedIn={Boolean(account)}
+              onOpenData={() => setDialog('data')}
+              onOpenHistory={() => setDialog('history')}
+              onOpenDisclaimer={() => setDisclaimerReopened(true)}
+              onSignOut={account ? () => { void account.onSignOut(); } : undefined}
+            />
           </div>
-          <UndoHistory store={store} />
         </header>
       )}
-      banner={(
-        <>
-          {showDisclaimer && (
-            <Disclaimer
-              focusOnOpen={disclaimerReopened}
-              onDismiss={() => {
-                store.dismissDisclaimer();
-                setDisclaimerReopened(false);
-                if (disclaimerReopened) requestAnimationFrame(() => document.getElementById('disclaimer-open')?.focus());
-              }}
-            />
-          )}
-        </>
-      )}
+      banner={showDisclaimer ? (
+        <Disclaimer
+          focusOnOpen={disclaimerReopened}
+          onDismiss={() => {
+            store.dismissDisclaimer();
+            setDisclaimerReopened(false);
+            if (disclaimerReopened) requestAnimationFrame(() => document.getElementById('disclaimer-open')?.focus());
+          }}
+        />
+      ) : undefined}
       footer={(
         <footer className="app-footer">
           <button type="button" id="disclaimer-open" className="link-button" onClick={() => setDisclaimerReopened(true)}>
@@ -139,56 +164,44 @@ function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppP
       {devicePlanPrompt}
       <div className="dashboard" data-dashboard={activeDashboard}>
         {returnTo?.to === activeDashboard && <ReturnLink dashboard={returnTo.from} />}
-        {activeDashboard === 'overview' && <Overview />}
-        {activeDashboard === 'income' && <IncomeSection requestedFieldId={requestedFieldId} />}
-        {SUMMARY_DASHBOARDS.has(activeDashboard) && <DashboardSummary dashboard={activeDashboard} />}
-        {activeDashboard === 'setup' && <SetupSection />}
+        {activeDashboard === 'overview' && <Introduction />}
         {activeDashboard === 'school' && <SchoolYearsSection requestedFieldId={requestedFieldId} onLoanCreated={id => { setFocusLoanId(id); navigateDashboard('loans', `loans.${id}.name`); }} />}
         {activeDashboard === 'loans' && <LoansSection focusLoanId={focusLoanId} onFocused={clearLoanFocus} />}
-        {activeDashboard === 'repayment' && <RepaymentSection />}
-        {activeDashboard === 'events' && <EventsSection />}
-        {activeDashboard === 'scenarios' && <ScenariosSection />}
-        {activeDashboard === 'federal' && <FederalSection />}
         {activeDashboard === 'results' && <ResultsSection />}
-        {activeDashboard === 'data' && <DataSection workbook={workbook} signedIn={Boolean(account)} />}
       </div>
+      {dialog === 'data' && (
+        <Dialog title="Your data" onClose={() => setDialog(null)}>
+          <DataTools workbook={workbook} signedIn={Boolean(account)} />
+        </Dialog>
+      )}
+      {dialog === 'history' && (
+        <Dialog title="Undo history" onClose={() => setDialog(null)}>
+          <UndoHistoryPanel store={store} />
+        </Dialog>
+      )}
     </AppShell>
   );
 }
 
-/** US-903: introduction to DebtNav's two tasks + cards to the main dashboards. No Results charts or tables. */
-function Overview() {
-  const { plan, readiness } = usePlanner();
-  const loansTotal = formatCurrency(money(sum(plan.loans.map(loan => loan.principal))));
-  const status = {
-    school: plural(plan.schoolYears.length, 'school year'),
-    loans: plan.loans.length ? `${plural(plan.loans.length, 'loan')} · ${loansTotal}` : 'No loans yet',
-    repayment: plan.repayment.payoffTarget?.mode === 'target' ? 'Planning to a payoff target' : `Budget ${formatCurrency(plan.postGradIncome.monthlyDebtBudget)}/mo`,
-    results: readinessStatusText(readiness),
-  };
-  return <section id="overview" className="panel overview" aria-labelledby="overview-heading">
-    <OverviewContent headingId="overview-heading" heading="Overview" onOpen={id => navigateDashboard(id)} status={status} />
-    <KeyFigures />
-  </section>;
-}
-
-const SUMMARY_DASHBOARDS = new Set(['setup', 'loans', 'repayment', 'events', 'scenarios', 'data']);
-
-function DashboardSummary({ dashboard }: { dashboard: string }) {
-  const { plan, projection } = usePlanner();
-  const repayment = projection?.repayment;
-  // Results-dependent metrics use the same readiness states as Results (never $0.00 or a date when inputs are missing).
-  const metrics: Record<string, [string, ReactNode][]> = {
-    setup: [['School years', String(plan.schoolYears.length)], ['Graduation', formatDate(plan.settings.graduationDate)]],
-    loans: [['Loans', String(plan.loans.length)], ['Total borrowed', <ResultFigure key="borrowed" result="totalBorrowed" value={formatCurrency(money(sum(plan.loans.map(loan => loan.principal))))} action={false} />]],
-    repayment: [['Monthly debt budget', formatCurrency(plan.postGradIncome.monthlyDebtBudget)],
-      ['Minimum payments', <ResultFigure key="minimums" result="minimumPayments" value={`${formatCurrency(projection?.minimumTotal)}/mo`} action={false} />],
-      ['Total projected interest', <ResultFigure key="interest" result="totalInterest" value={formatCurrency(repayment?.totalInterestPaid)} />]],
-    events: [['Life events', String(plan.lifeEvents.length)], ['Income changes', String(plan.lifeEvents.filter(event => event.type === 'income').length)], ['Starting debt budget', formatCurrency(plan.postGradIncome.monthlyDebtBudget) + '/mo']],
-    scenarios: [['Scenarios', String(plan.scenarios.length)], ['Base debt-free date', <ResultFigure key="debt-free" result="debtFreeDate" nonPayoffValue="No debt-free date" value={repayment?.debtFreeDate ? formatMonthYear(repayment.debtFreeDate) : 'No debt-free date'} />]],
-    data: [['School years saved', String(plan.schoolYears.length)], ['Loans saved', String(plan.loans.length)], ['Scenarios saved', String(plan.scenarios.length)]],
-  };
-  return <dl className="dashboard-metrics" aria-label="Dashboard summary">{(metrics[dashboard] ?? []).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;
+/** Introduction: the two questions, one status line and a Continue action. No results figures. */
+function Introduction() {
+  const { readiness } = usePlanner();
+  const next = readiness.items.find(item => item.severity === 'missing' || item.severity === 'invalid');
+  const destination = (next && resolveDashboard(next.target.dashboard)?.dashboard) || 'results';
+  const label = NAV_ITEMS.find(item => item.id === destination)?.label ?? 'Results';
+  return (
+    <section id="overview" className="panel overview" aria-labelledby="overview-heading">
+      <OverviewContent headingId="overview-heading" heading="Plan your student loans">
+        <div className="overview-continue">
+          <a href={`#${destination}`} className="button-like button-primary"
+            onClick={event => { event.preventDefault(); navigateDashboard(destination); }}>
+            Continue to {label}
+          </a>
+          <p>{readinessStatusText(readiness)}</p>
+        </div>
+      </OverviewContent>
+    </section>
+  );
 }
 
 /** "Back to Results" after following a readiness action to the field it needs. */

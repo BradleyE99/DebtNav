@@ -45,7 +45,8 @@ export function SaveStatusBadge({ live = true }: { live?: boolean }) {
   );
 }
 
-export function DataSection({ workbook, signedIn = false }: { workbook?: WorkbookApi; signedIn?: boolean }) {
+/** Your data (account menu dialog): saving state, JSON/Excel export and import, print, deletion. */
+export function DataTools({ workbook, signedIn = false }: { workbook?: WorkbookApi; signedIn?: boolean }) {
   const { store } = usePlanner();
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -68,7 +69,7 @@ export function DataSection({ workbook, signedIn = false }: { workbook?: Workboo
 
   function applyImport(text: string) {
     const result = store.importText(text);
-    setMessage(result.ok ? 'Plan imported. You can undo this import with Undo at the top of the page.' : `Import failed; your current plan is unchanged. ${result.errors.map(error => error.message).join(' ')}`);
+    setMessage(result.ok ? 'Plan imported. You can undo this import with Undo.' : `Import failed; your current plan is unchanged. ${result.errors.map(error => error.message).join(' ')}`);
   }
 
   async function onFile(event: ChangeEvent<HTMLInputElement>) {
@@ -94,8 +95,7 @@ export function DataSection({ workbook, signedIn = false }: { workbook?: Workboo
 
   const status = store.saveStatus;
   return (
-    <section id="data" className="panel" aria-labelledby="data-heading">
-      <h2 id="data-heading">Your data</h2>
+    <div id="data" className="data-tools">
       <p className="section-intro">
         {signedIn
           ? 'Your plan is saved to your DebtNav account as you edit, so you can continue on any device. Export a copy as JSON or Excel at any time.'
@@ -105,10 +105,10 @@ export function DataSection({ workbook, signedIn = false }: { workbook?: Workboo
         <h3>Saving</h3>
         <SaveStatusBadge live={false} />
         {status.state === 'conflict' && (
-          <p className="field-hint">Another device or tab saved a newer version first. <strong>Load the newer saved plan</strong> replaces what you see here; <strong>Keep my changes</strong> saves your version over it. Use the buttons at the top of the page.</p>
+          <p className="field-hint">Another device or tab saved a newer version first. <strong>Load the newer saved plan</strong> replaces what you see here; <strong>Keep my changes</strong> saves your version over it. Use the buttons in the header.</p>
         )}
         {(status.state === 'offline' || status.state === 'error') && (
-          <p className="field-hint">Your edits stay on screen. Use <strong>Retry saving</strong> at the top of the page, or export a copy so nothing is lost.</p>
+          <p className="field-hint">Your edits stay on screen. Use <strong>Retry saving</strong> in the header, or export a copy so nothing is lost.</p>
         )}
       </div>
 
@@ -170,7 +170,7 @@ export function DataSection({ workbook, signedIn = false }: { workbook?: Workboo
           <p>DebtNav has saved data that could not be read. Importing will overwrite it permanently.</p>
         </ConfirmDialog>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -236,7 +236,7 @@ function ExcelExchange({ workbook, onMessage }: { workbook?: WorkbookApi; onMess
     }
     store.replaceDocument(result.document, 'Import Excel file');
     setPreview(null);
-    onMessage(`Imported ${preview.fileName}. Your plan was replaced; you can undo this import with Undo at the top of the page.`);
+    onMessage(`Imported ${preview.fileName}. Your plan was replaced; you can undo this import with Undo.`);
   }
 
   const issues = preview?.value.errors ?? [];
@@ -314,7 +314,7 @@ function ExcelExchange({ workbook, onMessage }: { workbook?: WorkbookApi; onMess
       {confirming && preview && (
         <ConfirmDialog title="Replace your plan with this Excel file?" confirmLabel="Replace my plan" destructive
           onCancel={() => setConfirming(false)} onConfirm={() => { void commit(); }}>
-          <p>Your current plan will be replaced by the contents of {preview.fileName}. Nothing is merged. You can undo this during this session with Undo at the top of the page.</p>
+          <p>Your current plan will be replaced by the contents of {preview.fileName}. Nothing is merged. You can undo this during this session with Undo.</p>
         </ConfirmDialog>
       )}
     </div>

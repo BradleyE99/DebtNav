@@ -1,0 +1,25 @@
+/* Results: headline figures and collapsed input sections. */
+.results-headline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
+.results-headline > div { padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); min-width: 0; }
+.results-headline dt { font-size: 0.85rem; color: var(--ink-2); }
+.results-headline dd { margin: 4px 0 0; font-weight: 700; font-size: 1.2rem; overflow-wrap: anywhere; }
+.results-headline .figure-action, .results-headline .figure-reason { display: block; font-size: 0.85rem; font-weight: 500; }
+.results-sections { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
+.results-block { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); min-width: 0; }
+.results-block > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 10px 14px; cursor: pointer; min-height: 44px; }
+.results-block > summary h3 { margin: 0; font-size: 1.05rem; display: inline; }
+.results.panel .results-block > summary h3 { margin: 0; }
+.results-block__meta { color: var(--ink-2); font-size: 0.9rem; }
+.results-block__body { padding: 0 14px 12px; min-width: 0; }
+.results-block[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.payoff-order > summary .subtle { font-weight: 500; margin-left: 6px; }
+@media (max-width: 1023px) { .results-headline { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .results-headline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.breakdown-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 20px; margin: 4px 0 10px; }
+.breakdown-controls .segmented { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.breakdown-controls .segmented legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
+.yearly-breakdown .cell-note { display: block; font-size: 0.8rem; color: var(--ink-2); font-weight: 400; }
+.yearly-breakdown th[scope='row'] { white-space: normal; min-width: 120px; }
+.headline-detail { display: block; font-size: 0.82rem; font-weight: 500; color: var(--ink-2); }
+.income-effect { color: var(--ink); font-weight: 600; }
+.income-effect--zero { color: var(--danger); }

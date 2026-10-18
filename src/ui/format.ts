@@ -1,3 +1,4 @@
+import { academicYearOfSchoolYear, formatAcademicYear } from '../engine/academicYear';
 import { D } from '../engine/money';
 import { formatCurrency } from '../data/parse';
 import { listStrategies } from '../engine/strategies/registry';
@@ -77,4 +78,17 @@ export const EVENT_TYPE_LABELS = {
 
 export function strategyName(id: string): string {
   return listStrategies().find(entry => entry.id === id)?.name ?? id;
+}
+
+/** 50 → "4 yr 2 mo"; 11 → "11 mo"; 24 → "2 yr". */
+export function formatDuration(months: number): string {
+  const years = Math.floor(months / 12);
+  const rest = months % 12;
+  if (!years) return `${rest} mo`;
+  return rest ? `${years} yr ${rest} mo` : `${years} yr`;
+}
+
+/** "2026–2027 (Year 1)": the academic-year label the loans use, with the school-year number. */
+export function schoolYearLabel(year: { startDate: string }, index: number): string {
+  return `${formatAcademicYear(academicYearOfSchoolYear(year))} (Year ${index + 1})`;
 }

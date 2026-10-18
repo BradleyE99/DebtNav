@@ -14,9 +14,10 @@
     "lint": "eslint . && node scripts/check-money.mjs",
     "test:e2e": "playwright test",
     "check": "npm run typecheck && npm run lint && npm test && npm run test:bench && npm run build",
-    "dev:api": "tsx watch server/src/index.ts",
-    "start": "tsx server/src/index.ts",
-    "db:migrate": "tsx server/src/migrate.ts"
+    "dev:local": "node scripts/dev-local.mjs",
+    "dev:api": "tsx watch --env-file-if-exists=.env server/src/index.ts",
+    "start": "tsx --env-file-if-exists=.env server/src/index.ts",
+    "db:migrate": "tsx --env-file-if-exists=.env server/src/migrate.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.10",

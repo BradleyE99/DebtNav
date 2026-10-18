@@ -4,6 +4,10 @@ This covers US-1201 (Google sign-in) and US-1202 (hosted backend and durable dat
 
 ## Local setup
 
+**Quickest (no Google credentials):** run `npm ci`, then `npm run dev:local`, and open http://localhost:5173. This one command starts the mock sign-in page (port 8090, from `e2e/support/mock-oidc.mjs`), the API (8787) and Vite (5173), and Ctrl+C stops them all. Sign in with any test user name; each name is a separate account (`<name>@example.test`). Change ports with `LOCAL_APP_PORT`, `LOCAL_API_PORT` and `LOCAL_AUTH_PORT`.
+
+**With real Google sign-in:**
+
 1. Run `npm ci` (Node.js 22.12+).
 2. Run `cp .env.example .env`. Leave `DATABASE_URL` unset to use embedded PGlite in `.data/pglite` (git-ignored).
 3. Google credentials (optional for local work). In Google Cloud Console → APIs & Services → Credentials, create an **OAuth client ID** of type **Web application**:
@@ -12,7 +16,7 @@ This covers US-1201 (Google sign-in) and US-1202 (hosted backend and durable dat
    - Put the client ID and secret in `.env` as `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET`.
 
    Without them the API still runs. The app shows a "sign-in is not set up" screen and never fakes authentication.
-4. Start the API with `node --env-file=.env node_modules/tsx/dist/cli.mjs watch server/src/index.ts`, or export the variables and run `npm run dev:api`. Migrations apply at startup.
+4. Start the API with `npm run dev:api` (it loads `.env` when present). Migrations apply at startup.
 5. Start the app with `npm run dev`. Vite proxies `/api` to `API_PORT`, so the app and the cookie share one origin.
 
 `npm run db:migrate` applies migrations without starting the server, using the same `DATABASE_URL` / `PGLITE_DIR`.

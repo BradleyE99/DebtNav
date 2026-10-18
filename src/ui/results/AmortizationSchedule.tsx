@@ -24,7 +24,7 @@ export function AmortizationSchedule() {
       <h3 id="schedule-heading">Amortization schedule</h3>
       <div className="schedule-controls">
         <div className="field">
-          <label htmlFor="schedule-loan">Show</label>
+          <label htmlFor="schedule-loan">Loans shown</label>
           <select id="schedule-loan" value={selected} onChange={event => { setLoanId(event.target.value); setPage(0); }}>
             <option value="all">All loans combined</option>
             {plan.loans.map(loan => <option key={loan.id} value={loan.id}>{loan.name}</option>)}
@@ -66,7 +66,7 @@ export function AmortizationSchedule() {
         </>
       )}
       <Explain>
-        <p>Each month: interest = balance × annual rate ÷ 12, rounded half-up to cents. Payment = minimum payment plus any extra your strategy sends to this loan; principal = payment − interest; remaining balance = previous balance − principal.</p>
+        <p>Each month: interest = balance × annual rate ÷ 12, rounded half-up to cents. Payment = minimum payment plus any extra your payoff order sends to this loan. Payments go to interest first; principal = payment − interest paid. Remaining balance = everything still owed, including interest not yet added to the balance (in grace months, or when interest is not capitalized), so it can fall by less than the principal shown or grow.</p>
         <p>The final payment is adjusted so the balance ends at exactly $0.00, so total principal paid equals the balance at repayment start. The combined view sums every loan for the month.</p>
       </Explain>
     </>

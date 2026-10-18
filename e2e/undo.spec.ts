@@ -3,14 +3,9 @@
  * disabled when empty, import replacement undoable.
  */
 import type { Page, Locator } from '@playwright/test';
-import { test, expect, getPlan } from './support/fixtures';
+import { test, expect, goTo, getPlan } from './support/fixtures';
 
-async function go(page: Page, id: string) {
-  const menu = page.getByRole('button', { name: 'Menu', exact: true });
-  if (await menu.isVisible()) await menu.click();
-  await page.locator('nav a[href="#' + id + '"]').click();
-  await expect(page.locator('.dashboard')).toHaveAttribute('data-dashboard', id);
-}
+const go = goTo;
 async function retype(page: Page, field: Locator, value: string) {
   await field.click();
   await page.keyboard.press('Control+A');
@@ -19,7 +14,7 @@ async function retype(page: Page, field: Locator, value: string) {
   await field.blur();
 }
 const undoButton = (page: Page) => page.getByRole('group', { name: 'Undo' }).getByRole('button', { name: 'Undo', exact: true });
-const budgetField = (page: Page) => page.getByLabel('Monthly debt budget (your chosen payment)');
+const budgetField = (page: Page) => page.getByLabel('Monthly payment', { exact: true });
 const serverBudget = async (page: Page) => ((await getPlan(page.request)).document?.plan.postGradIncome as { monthlyDebtBudget: string }).monthlyDebtBudget;
 
 test('Undo is visible but disabled when nothing can be undone', async ({ signedIn: page }) => {
@@ -79,8 +74,19 @@ test('Undo and its history are keyboard operable', async ({ signedIn: page }) =>
   await undoButton(page).focus();
   await page.keyboard.press('Enter');
   await expect(budgetField(page)).not.toHaveValue('333.00');
-  const history = page.getByRole('group', { name: 'Undo' }).getByRole('button', { name: /History/ });
-  await history.focus();
+  // The history list is in Account → Undo history; all of it works with the keyboard.
+  const account = page.getByRole('button', { name: /^Account/ });
+  await account.focus();
   await page.keyboard.press('Enter');
-  await expect(history).toHaveAttribute('aria-expanded', 'true');
+  await expect(account).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Undo history' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'Undo history' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Deleting your data is not part of this history');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(account).toBeFocused();
 });

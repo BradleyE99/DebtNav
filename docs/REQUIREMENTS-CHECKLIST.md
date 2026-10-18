@@ -1,8 +1,39 @@
 # Requirements implementation and verification checklist
 
-Updated 2026-10-13 after the sidebar and loan-card continuation. Implementation status and verification are recorded separately. "E2E" means the real Chromium tests in `e2e/journey.spec.ts`, `e2e/sidebar.spec.ts` and `e2e/loans.spec.ts`. "Vitest" means unit, property or component tests. Latest local gate: 517/517 Vitest tests, 2/2 benchmarks, typecheck, ESLint, money lint and production build pass. Prior coverage was 98.3% across engine, policy, data, state and integrations; coverage was not rerun for this UI continuation. Nothing has been pushed, merged or run in CI.
+Updated 2026-10-17 for the four-destination simplification (see the first section); earlier sections are kept as history. Implementation status and verification are recorded separately. "E2E" means the real Chromium tests in `e2e/journey.spec.ts`, `e2e/sidebar.spec.ts` and `e2e/loans.spec.ts`. "Vitest" means unit, property or component tests. Latest local gate: 517/517 Vitest tests, 2/2 benchmarks, typecheck, ESLint, money lint and production build pass. Prior coverage was 98.3% across engine, policy, data, state and integrations; coverage was not rerun for this UI continuation. Nothing has been pushed, merged or run in CI.
 
-## Sidebar and loan-card continuation
+## October 17 simplification (four destinations)
+
+Scope: `docs/REQUIREMENTS-v0.2.md` §14 (US-1301–US-1306). It supersedes the sidebar and separate-dashboard requirements recorded below (US-903 sidebar, US-905 Federal page, and the "Sidebar and loan-card continuation" navigation notes). No stored-plan schema change: SCHEMA_VERSION is unchanged, and scenarios, federal settings, life events, custom order and extra payment are still stored, exported and imported while their screens are hidden.
+
+| ID | Requirement | Implementation | Verification | Status |
+|---|---|---|---|---|
+| US-1301 | Exactly four primary destinations; old hashes redirect; account menu holds data tools, undo history, disclaimer and sign-out; persistent Undo | ui/nav/navItems.ts, AppShell.tsx (tabs), navigation.ts (redirect map), PlannerApp.tsx (account menu, header Undo), common/Dialog.tsx | AppShell.test.tsx; e2e/sidebar.spec.ts (tabs, redirects, account menu, keyboard, 360 px); e2e/simplified.spec.ts | Done |
+| US-1302 | Introduction: short description, sign-in, start/resume action, no results | overview/OverviewContent.tsx; auth/AuthComponents.tsx | Overview.test.tsx; e2e/auth.spec.ts | Done |
+| US-1303 | College Costs: academic-year selector, dates, costs, resources, in-school work, one-time aid/cost changes; total cost, resources, gap, allocated loans, still unfunded | sections/SchoolYearsSection.tsx (+ IncomeSection and SetupSection pieces, event cards) | dashboards.test.tsx; engine borrowing tests; tester R1; e2e | Done |
+| US-1304 | Loan Amounts: compact cards, academic-year grouping, Advanced section for required-payment and interest options | sections/LoansSection.tsx | LoansSection.test.tsx, LoansGrouping.test.tsx; e2e/loans.spec.ts, e2e/loan-years.spec.ts | Done |
+| US-1305 | Results: checklist, five headline figures, expandable earnings/payment, repayment start, bonuses (to debt / kept), income changes (resulting payment shown), optional payoff target | results/ResultsSection.tsx; sections/RepaymentSection.tsx, EventsSection.tsx | resultsGuidance.test.tsx, RepaymentSection.test.tsx; e2e/target.spec.ts, e2e/readiness.spec.ts | Done |
+| US-1306 | Yearly breakdown summarising the monthly projection; calendar or repayment years; partial final year; display count never changes results; non-payoff shows remaining balance | engine/yearlyBreakdown.ts; results/AmortizationSchedule.tsx | yearlyBreakdown.test.ts; tester P1 (independent); e2e | Done |
+
+Latest local gate (2026-10-18, run by the lead): typecheck (app + server), ESLint and money lint pass; Vitest 970/970 (54 files, including the tester's independent suites); benchmark 3/3; production build; Playwright 75/75 (desktop, 360 px and the API-restart project, including `e2e/simplified.spec.ts` 14/14). Not run: real Google sign-in (mock OIDC only), Docker image build, CI, manual screen reader, usability testing.
+
+Calculation audit (math auditor, independently re-derived by the tester):
+
+| Defect | Severity | Fix | Verification |
+|---|---|---|---|
+| D1 target payment could be below the required minimums | High | targetPayment.ts never returns less than the minimums; `limitedByMinimum` says when minimums alone reach the target | simplify-acceptance tests (89.89 → ≥ 139.29; 46.86 → ≥ 203.87); targetPayment.test.ts |
+| D2 schedule "interest" was interest paid, so rows did not reconcile | Medium | additive output fields per row (interest charged, new borrowing, bonus applied) | simplify-acceptance reconciliation tests |
+| D3 balance at repayment start left out uncapitalized interest | Medium | owed-at-start output; Results shows "Owed when payments start" | simplify-acceptance (12,546.30) |
+| D4 "default share of raises" never used by the engine | Medium | presented only as "Prefills new changes only" | UI review |
+| D5 income changes moved payments invisibly (both directions) | Medium | each income change shows the resulting payment and flags a drop to $0 | RepaymentSection/Events tests; e2e |
+| D7 "N payments" counted $0 grace months | Low | wording "N months of payments" / "Xy Ym" | e2e |
+| D9 bonus portion actually used was not reported | Low | bonus applied per row; Results shows To debt / Kept | simplify-acceptance (3,000.00; 417.10) |
+| Excel import read %-formatted cells 100× too small | Medium | server/src/workbook/read.ts honours percent formats | server/test/workbook-percent.simplify.independent.test.ts |
+| Repeated "payments do not cover the interest" warning (4×) | Low | one message per condition | resultsGuidance tests |
+
+Accepted as documented behaviour: D6 (income changes and bonuses apply from that calendar month's payment), D8 (final payment may exceed the budget by rounding cents). Open policy question: whether federal loans should still capitalize interest at repayment start (kept as a labelled modeling assumption).
+
+## Sidebar and loan-card continuation (history; navigation superseded by US-1301)
 
 The continuation inherited HEAD `77006e6` and extensive uncommitted planner, engine, persistence, navigation and loan-card work. No Claude conversation history was available. Existing changes were preserved and checked rather than rebuilt.
 
@@ -74,7 +105,7 @@ Verified in real Chromium by the lead, separately from the agents' tests:
 | NFR-2 Matches reference to $0.01 | golden.test.ts: full 120-row BigInt reference | Pass |
 | NFR-3 Invariants | fast-check: non-negative balances, principal conservation, monotonic months for budget and extra payment, scenario identity, no throws or mutation | Pass for tested domains |
 | NFR-4 < 100 ms | bench asserts mean and max. E2E latency in real Chromium. | Pass locally. CI not yet run. |
-| NFR-5 Privacy | Lead's network capture: the only external request is the user-initiated Scorecard GET. privacy.test.ts scans data and state. | Pass |
+| NFR-5 Privacy | Financial inputs go only to DebtNav's own same-origin `/api/`. privacy.test.ts (updated 2026-10-17 for v0.2) allows network access only in state/api.ts, requires relative `/api/` paths and same-origin credentials, and rejects absolute URLs anywhere in data and state. | Pass |
 | NFR-6 WCAG 2.1 AA | axe (wcag2a/aa, 21a/aa, color-contrast enabled) on a fully populated page with the dialog open. Keyboard-only E2E. Inert modal. Single live region. | Automated pass. Manual screen-reader check outstanding. |
 | NFR-7 5-minute first use | Needs 5+ student participants | Outstanding (human study) |
 | NFR-8 360 px | narrow-360 Playwright project; lead measured scrollWidth 360/360 | Pass |

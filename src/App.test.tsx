@@ -38,8 +38,8 @@ it('signed in: creates the plan on the server, saves edits there, and restores t
   const view = render(<App client={api} />);
   expect(await screen.findByRole('heading', { level: 1, name: 'DebtNav' })).toBeTruthy();
   await waitFor(() => expect(server.revision).toBe(1));
-  await user.click(screen.getAllByRole('link', { name: 'Repayment Plan' })[0]);
-  const budget = await screen.findByLabelText(/^Monthly debt budget/) as HTMLInputElement;
+  await user.click(screen.getByRole('link', { name: 'Results' }));
+  const budget = await screen.findByLabelText('Monthly payment') as HTMLInputElement;
   await user.clear(budget);
   await user.type(budget, '450');
   await waitFor(() => expect(server.document?.plan.postGradIncome.monthlyDebtBudget).toBe('450.00'), { timeout: 4000 });
@@ -48,8 +48,8 @@ it('signed in: creates the plan on the server, saves edits there, and restores t
   view.unmount();
   render(<App client={api} />);
   await screen.findByRole('heading', { level: 1, name: 'DebtNav' });
-  await user.click(screen.getAllByRole('link', { name: 'Repayment Plan' })[0]);
-  expect(((await screen.findByLabelText(/^Monthly debt budget/)) as HTMLInputElement).value).toBe('450.00');
+  await user.click(screen.getByRole('link', { name: 'Results' }));
+  expect(((await screen.findByLabelText('Monthly payment')) as HTMLInputElement).value).toBe('450.00');
 });
 
 it('a plan stored on this device before accounts is offered, never attached automatically', async () => {

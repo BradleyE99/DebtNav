@@ -152,13 +152,13 @@ export function LoansSection({ focusLoanId, onFocused }: { focusLoanId: string |
   return (
     <section id="loans" ref={sectionRef} className="panel" aria-labelledby="loans-heading"
       onFocus={event => { lastFocusedRef.current = event.target.id || null; }}>
-      <h2 id="loans-heading" tabIndex={-1}>Your loans</h2>
-      <p className="section-intro">Add each loan, or create one from a school year's gap. Loans never change automatically when your gap changes.</p>
+      <h2 id="loans-heading" tabIndex={-1}>Loan Amounts</h2>
+      <p className="section-intro">Each loan you have or plan to take. Loans never change when a gap changes.</p>
       <p className="computed" role="status">Total borrowed: <strong>{formatCurrency(totalDebt)}</strong> across {plan.loans.length} loan{plan.loans.length === 1 ? '' : 's'}</p>
       {inSchoolMonthly && (
         <p className="computed">In-school interest you pay: about <strong>{formatCurrency(inSchoolMonthly)} per month</strong> while in school and grace.</p>
       )}
-      {plan.loans.length === 0 && <p className="empty">No loans yet. Add each loan you have or plan to take, or create one from a school year's gap under Costs. Your debt-free date and total interest need at least one loan.</p>}
+      {plan.loans.length === 0 && <p className="empty">No loans yet. Add each loan you have or plan to take, or create one from a school year's gap under College Costs. Your debt-free date and total interest need at least one loan.</p>}
       {plan.loans.length > 0 && (
         <div className="loan-list-toolbar">
           <div className="field-check loan-list-grouping">
@@ -234,6 +234,8 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
   const detailsId = `${base}-details`;
   const attentionId = `${base}-attention`;
   const displayName = loanDisplayName(loan, index);
+  // Advanced terms open by themselves when one of their fields needs attention (reveal also opens them).
+  const [advancedOpen, setAdvancedOpen] = useState(() => loanErrors.some(error => !/\.(name|type|principal|annualRate|academicYear|disbursementDate)$/.test(fieldIdForPath(plan, error.path))));
   const yearIndex = loan.schoolYearId ? plan.schoolYears.findIndex(year => year.id === loan.schoolYearId) : -1;
   const yearSummary = projection?.years.find(year => year.mismatchLoanIds.includes(loan.id));
   const atRepayment = projection?.repayment?.loans.find(item => item.loanId === loan.id);
@@ -284,7 +286,7 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
         <FieldStatusProvider>
           {yearSummary && (
             <p className="notice notice--warning">
-              Year {plan.schoolYears.findIndex(year => year.id === yearSummary.yearId) + 1}'s gap + buffer is now {formatCurrency(yearSummary.bufferedGap)}, but this loan was created for {formatCurrency(loan.gapAtCreation)} and is {formatCurrency(loan.principal)}. The loan was not changed — edit the principal if you want them to match.
+              Year {plan.schoolYears.findIndex(year => year.id === yearSummary.yearId) + 1}'s gap + buffer is now {formatCurrency(yearSummary.bufferedGap)}; it was {formatCurrency(loan.gapAtCreation)} when this loan was created. The loan ({formatCurrency(loan.principal)}) was not changed — edit the amount if you want it to follow.
             </p>
           )}
           {loanErrors.length > 0 && (
@@ -296,13 +298,17 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
           <div className="field-grid">
             <TextField id={`${base}.name`} label="Loan name" value={loan.name} onCommit={name => patch({ name })} />
             <SelectField id={`${base}.type`} label="Loan type" options={loanTypeOptions} value={loan.type} onCommit={type => patch({ type })} />
-            <MoneyField id={`${base}.principal`} label="Amount borrowed (principal)" value={loan.principal} onCommit={principal => patch({ principal })} />
-            <RateField id={`${base}.annualRate`} label="Annual interest rate" hint="0–30%." value={loan.annualRate} onCommit={annualRate => patch({ annualRate })} />
+            <MoneyField id={`${base}.principal`} label="Amount borrowed" value={loan.principal} onCommit={principal => patch({ principal })} />
+            <RateField id={`${base}.annualRate`} label="Annual interest rate" value={loan.annualRate} onCommit={annualRate => patch({ annualRate })} />
             <AcademicYearField loan={loan} academicYear={academicYear} onCommit={value => patch({ academicYear: value })} />
             <DateField id={`${base}.disbursementDate`} label="Disbursement date" value={loan.disbursementDate}
               externalError={loanErrors.find(error => fieldIdForPath(plan, error.path) === `${base}.disbursementDate`)?.message} onCommit={disbursementDate => patch({ disbursementDate })} />
+          </div>
+          <details className="loan-card__advanced" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
+          <summary>Advanced <span className="subtle">term, required payments, interest in school</span></summary>
+          <div className="field-grid">
             <IntegerField id={`${base}.termMonths`} label="Repayment term (months)" hint="120 months = 10 years." min={1} max={1200} value={loan.termMonths} onCommit={termMonths => patch({ termMonths })} />
-            <OptionalMoneyField id={`${base}.monthlyPayment`} label="Fixed monthly payment (optional)" hint="Leave blank to use the calculated minimum. A fixed payment replaces this loan's minimum as its share of your monthly budget; if the budget is less than all shares, each is reduced proportionally."
+            <OptionalMoneyField id={`${base}.monthlyPayment`} label="Fixed monthly payment (optional)" hint="Blank: the calculated minimum is used."
               value={loan.monthlyPayment} onCommit={monthlyPayment => patch({ monthlyPayment })} />
           </div>
           <RequiredPaymentFields loan={loan} errorFor={path => loanErrors.find(error => fieldIdForPath(plan, error.path) === path)?.message} />
@@ -325,6 +331,7 @@ function LoanCard({ loan, index, nested, open, onToggle }: { loan: PlannerLoan; 
                 value={loan.accruesInterestInSchool !== false} onCommit={accruesInterestInSchool => patch({ accruesInterestInSchool })} />
             )}
           </div>
+          </details>
           {atRepayment && (
             <dl className="inline-figures">
               <div><dt>Interest before repayment</dt><dd>{formatCurrency(atRepayment.accruedInterest)}</dd></div>

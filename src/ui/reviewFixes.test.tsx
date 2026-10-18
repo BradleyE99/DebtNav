@@ -23,22 +23,23 @@ describe('review fixes', () => {
   it('M2: the default share of raises seeds new and switched income-change events', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
-    // US-501: the default share of raises moved with the other post-graduation fields to Repayment Plan.
-    navigateTo('repayment', true);
-    const share = screen.getByLabelText('Default share of raises put toward debt');
+    // The default share lives in Results → Income changes and only prefills new income changes (D4).
+    navigateTo('results', true);
+    const share = screen.getByLabelText('Default % to debt for new income changes');
     await user.clear(share);
     await user.type(share, '30');
-    navigateTo('events');
     await user.click(screen.getByRole('button', { name: 'Add income change' }));
     const income = view.plan().lifeEvents[0];
     expect(income).toMatchObject({ type: 'income', allocationPercent: '30', amount: view.plan().postGradIncome.annualSalary });
     expect((byId(`lifeEvents.${income.id}.allocationPercent`)).value).toBe('30');
+    // Changing the default later leaves existing income changes as they are.
+    await user.clear(share);
+    await user.type(share, '60');
+    expect(view.plan().lifeEvents[0].allocationPercent).toBe('30');
 
-    await user.click(screen.getByRole('button', { name: 'Add life event' }));
+    await user.click(screen.getByRole('button', { name: 'Add bonus or extra payment' }));
     const windfall = view.plan().lifeEvents[1];
-    expect(windfall.allocationPercent).toBe('100');
-    await user.selectOptions(byId(`lifeEvents.${windfall.id}.type`), 'income');
-    expect(view.plan().lifeEvents[1].allocationPercent).toBe('30');
+    expect(windfall).toMatchObject({ type: 'windfall', allocationPercent: '100' });
   });
 
   it('M3: temporary negative amortization keeps the debt-free date and shows the engine warning instead', () => {
@@ -51,17 +52,15 @@ describe('review fixes', () => {
       lifeEvents: [{ id: 'raise', name: 'Raise', type: 'income', date: '2032-01-01', amount: '85000.00', allocationPercent: '50' }],
     };
     renderPlanner({ plan });
-    navigateTo('results', true);
-    navigateTo('overview');
-    const debtFree = screen.getByTestId('key-debt-free').textContent ?? '';
     navigateTo('results');
-    const summary = document.querySelector('.summary') as HTMLElement;
-    if (/^[A-Z][a-z]{2} \d{4}$/.test(debtFree)) {
-      expect(summary.textContent).not.toMatch(/there is no debt-free date/);
-      expect(within(summary).getAllByText(/interest|grow/i).length).toBeGreaterThan(0);
-    } else {
-      expect(summary.textContent).toMatch(/there is no debt-free date/);
-    }
+    const debtFree = screen.getByTestId('headline-debt-free').textContent ?? '';
+    const results = byId('results-heading').closest('section') as HTMLElement;
+    expect(/^[A-Z][a-z]{2} \d{4}$/.test(debtFree)).toBe(true);
+    expect(results.textContent).not.toMatch(/there is no debt-free date/);
+    // One message for the condition, not one per loan or month.
+    const growing = [...results.querySelectorAll('.notice')].filter(notice => /don't cover the interest/.test(notice.textContent ?? ''));
+    expect(growing).toHaveLength(1);
+    expect(growing[0].textContent).toMatch(/so the balance grows until payments increase/);
   });
 
   it('M1: a disbursement date after repayment starts is rejected at the field and results stay visible', async () => {
@@ -77,8 +76,8 @@ describe('review fixes', () => {
     expect(field.getAttribute('aria-invalid')).toBe('true');
     expect(document.getElementById('loans.loan-b.disbursementDate-error')?.textContent).toMatch(/repayment start/i);
     expect(view.plan().loans[1].disbursementDate).toBe(original);
-    navigateTo('overview');
-    expect(screen.getByTestId('key-gap').textContent).toBe('$6,000.00');
+    navigateTo('school');
+    expect(document.querySelector('.gap-main dd')?.textContent).toBe('$6,000.00');
   });
 
   it('m1: comparison entries carrying an error are treated as not comparable', () => {
@@ -116,16 +115,17 @@ describe('review fixes', () => {
     navigateTo('school', true);
     const totals = document.querySelector('[aria-label="Year 1 cost totals"]')?.textContent ?? '';
     expect(totals).toContain('Cost items$10,000.00');
-    expect(totals).toContain('School expense events+$1,500.00');
+    expect(totals).toContain('One-time cost changes+$1,500.00');
     expect(totals).toContain('Year 1 cost total$11,500.00');
   });
 
-  // m5 is superseded by US-905: the federal repayment-plan comparison was removed (Federal shows "Coming soon").
-  it('m5 (US-905): no federal comparison table remains on the Federal dashboard', () => {
+  // m5 is superseded by US-905 and the simplification: there is no Federal page; old #federal links land on Results.
+  it('m5 (US-905): no Federal page or federal comparison table remains', () => {
     renderPlanner({ plan: samplePlan() });
     navigateTo('federal', true);
+    expect(document.querySelector('.dashboard')?.getAttribute('data-dashboard')).toBe('results');
     expect(screen.queryByRole('region', { name: 'Federal repayment plan comparison' })).toBeNull();
-    expect(screen.getByText('Coming soon')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Federal' })).toBeNull();
   });
 
   it('m7: the save status is announced by a single live region', () => {
@@ -144,8 +144,12 @@ describe('review fixes', () => {
     expect((view.container as HTMLElement & { inert?: boolean }).inert).toBe(true);
     expect(view.container.contains(dialog)).toBe(false);
     await user.keyboard('{Escape}');
-    expect(view.container.getAttribute('aria-hidden')).toBeNull();
+    // Back in the Your data dialog: still modal over the page, focus on the button that opened the confirmation.
+    expect(screen.getByRole('dialog', { name: 'Your data' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Delete all my data' })).toBe(document.activeElement);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(view.container.getAttribute('aria-hidden')).toBeNull();
   });
 
   // m15 updated for accounts (US-1001) and US-905: the Scorecard lookup is gone; the disclaimer states where the plan goes.
@@ -170,14 +174,12 @@ describe('review fixes', () => {
     };
     window.scrollTo = () => {};
     render(<PlannerApp store={store} />);
-    expect(screen.getByTestId('key-gap').textContent).toBe('$6,000.00');
-    expect(screen.getByTestId('key-debt-free').textContent).toBe("Can't be projected");
+    navigateTo('results');
+    expect(screen.getByTestId('headline-debt-free').textContent).toBe("Can't be projected");
     navigateTo('school', true);
     const yearId = plan.schoolYears[0].id;
     const yearCard = byId(`year-${yearId}-heading`).closest('article') as HTMLElement;
-    expect(yearCard.textContent).toContain('$6,000.00');
-    navigateTo('results');
-    fireEvent.change(screen.getByLabelText('Explore results'), { target: { value: 'school' } });
+    expect(yearCard.querySelector('.gap-main dd')?.textContent).toBe('$6,000.00');
     expect(screen.getByRole('region', { name: 'School year summary table' })).toBeTruthy();
     navigateTo('loans');
     const field = byId('loans.loan-b.disbursementDate');

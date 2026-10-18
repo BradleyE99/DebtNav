@@ -3,15 +3,10 @@
  * edits (409 → conflict UI), offline and server errors with retry, account deletion.
  */
 import type { Page, Locator } from '@playwright/test';
-import { test, expect, openPlanner, seedPlan, getPlan, putPlan, restartApi, secondDevice, APP_ORIGIN, CSRF } from './support/fixtures';
+import { test, expect, goTo, openPlanner, seedPlan, getPlan, putPlan, restartApi, secondDevice, APP_ORIGIN, CSRF } from './support/fixtures';
 
 const status = (page: Page) => page.locator('.save-status');
-async function go(page: Page, id: string) {
-  const menu = page.getByRole('button', { name: 'Menu', exact: true });
-  if (await menu.isVisible()) await menu.click();
-  await page.locator('nav a[href="#' + id + '"]').click();
-  await expect(page.locator('.dashboard')).toHaveAttribute('data-dashboard', id);
-}
+const go = goTo;
 async function retype(page: Page, field: Locator, value: string) {
   await field.click();
   await page.keyboard.press('Control+A');
@@ -20,7 +15,7 @@ async function retype(page: Page, field: Locator, value: string) {
   await field.blur();
 }
 /** The post-graduation monthly budget (Repayment Plan owns it, US-501). */
-const budgetField = (page: Page) => page.getByLabel('Monthly debt budget (your chosen payment)');
+const budgetField = (page: Page) => page.getByLabel('Monthly payment', { exact: true });
 async function editBudget(page: Page, value: string) {
   await go(page, 'repayment');
   await retype(page, budgetField(page), value);

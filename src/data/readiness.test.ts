@@ -14,7 +14,7 @@ import {
 
 const REPAYMENT_KEYS: ResultKey[] = ['debtFreeDate', 'totalInterest', 'paymentSchedule', 'balanceChart', 'strategyComparison'];
 const LOAN_KEYS: ResultKey[] = ['totalBorrowed', 'loanDetails', 'minimumPayments', ...REPAYMENT_KEYS];
-const DASHBOARDS = ['overview', 'income', 'setup', 'school', 'loans', 'repayment', 'events', 'scenarios', 'federal', 'results', 'data'];
+const DASHBOARDS = ['overview', 'school', 'loans', 'results'];
 const SEVERITY_ORDER = ['invalid', 'missing', 'warning', 'assumption'];
 
 const loan = (id: string, principal: string, extra: Partial<PlannerLoan> = {}): PlannerLoan => ({
@@ -197,7 +197,7 @@ describe('readiness: existing-loan-only repayment (§8.2)', () => {
   // federal settings never produce readiness items and nothing sends the user to the Federal dashboard.
   it('federal loans with stored federal settings produce no federal items (US-905)', () => {
     expect(item(r, 'federal.agiDefault')).toBeUndefined();
-    expect(r.items.filter(i => i.target.dashboard === 'federal')).toEqual([]);
+    expect(r.items.filter(i => i.target.fieldId.startsWith('borrower.') || /^repayment\.(annualAGI|familySize|federalPlan)/.test(i.target.fieldId))).toEqual([]);
     expect(r.results.debtFreeDate.state).toBe('complete');
   });
 
@@ -244,7 +244,7 @@ describe('readiness: school-only planning (§8.3)', () => {
   it('hourly earnings with $0 wage → earnings.<id>.zero targeting the Income dashboard wage field', () => {
     const p = plan(p => { p.schoolYears[0].resources = [resource('job', 'job', '0.00', { incomeMode: 'hourly', hoursPerWeek: '15', weeksWorked: '30' })]; });
     const i = item(ready(p), 'earnings.job.zero');
-    expect(i).toMatchObject({ severity: 'warning', target: { dashboard: 'income', fieldId: `schoolYears.${p.schoolYears[0].id}.resources.job.hourlyWage` } });
+    expect(i).toMatchObject({ severity: 'warning', target: { dashboard: 'school', fieldId: `schoolYears.${p.schoolYears[0].id}.resources.job.hourlyWage` } });
     expect(i?.blocks).toContain('schoolEarnings');
   });
 
@@ -256,7 +256,7 @@ describe('readiness: school-only planning (§8.3)', () => {
 
 describe('readiness: monthly budget (§8.7, §8.8)', () => {
   // US-501: the monthly budget is edited in Repayment Plan (was Income & Earnings).
-  const budgetTarget = { dashboard: 'repayment', fieldId: 'postGradIncome.monthlyDebtBudget' };
+  const budgetTarget = { dashboard: 'results', fieldId: 'postGradIncome.monthlyDebtBudget' };
 
   it('budget $0 with a loan → budget.zero missing; repayment keys incomplete (not nonPayoff); minimums still complete', () => {
     const r = ready(completePlan(p => { p.postGradIncome.monthlyDebtBudget = '0.00'; }));
@@ -284,7 +284,7 @@ describe('readiness: monthly budget (§8.7, §8.8)', () => {
     expect(r.results.totalInterest.state).toBe('nonPayoff');
     const reason = item(r, 'repayment.nonPayoff');
     expect(reason?.target).toEqual(budgetTarget);
-    expect(reason?.actionLabel).toMatch(/budget/i);
+    expect(reason?.actionLabel).toMatch(/monthly payment/i);
     expect(r.results.debtFreeDate.itemIds).toContain('repayment.nonPayoff');
     expect(item(r, 'budget.zero')).toBeUndefined();
   });
@@ -379,7 +379,7 @@ describe('readiness: valid zeros are never missing (§8.4)', () => {
 describe('readiness: salary baseline for income events', () => {
   it('income event with default salary → salary.baseline assumption on the Repayment Plan dashboard (US-501)', () => {
     const r = ready(completePlan(p => { p.lifeEvents = [event('raise', 'income', '65000.00', { date: '2031-01-01', allocationPercent: '50' })]; }));
-    expect(item(r, 'salary.baseline')).toMatchObject({ severity: 'assumption', target: { dashboard: 'repayment', fieldId: 'postGradIncome.annualSalary' } });
+    expect(item(r, 'salary.baseline')).toMatchObject({ severity: 'assumption', target: { dashboard: 'results', fieldId: 'postGradIncome.annualSalary' } });
     expect(r.results.eventImpacts.state).not.toBe('notApplicable');
   });
 
@@ -414,20 +414,21 @@ describe('readiness: invalid states', () => {
     const p = completePlan();
     const r = getPlanReadiness(p, { outputs: null, projectionErrors: [{ path: 'postGradIncome.monthlyDebtBudget', code: 'INVALID_MONEY', message: 'Enter an amount.' }] });
     expectWellFormed(r);
-    expect(item(r, 'engine.postGradIncome.monthlyDebtBudget')).toMatchObject({ severity: 'invalid', target: { dashboard: 'repayment', fieldId: 'postGradIncome.monthlyDebtBudget' } });
+    expect(item(r, 'engine.postGradIncome.monthlyDebtBudget')).toMatchObject({ severity: 'invalid', target: { dashboard: 'results', fieldId: 'postGradIncome.monthlyDebtBudget' } });
     for (const key of [...LOAN_KEYS, 'borrowingGap'] as ResultKey[]) expect(r.results[key].state, key).toBe('invalid');
   });
 
-  it('a scenario that cannot be projected → scenarioComparison invalid; base results unaffected (§8.9)', () => {
+  it('a scenario that cannot be projected is not listed (scenarios have no editor); base results unaffected', () => {
     const scenario: Scenario = { id: 'late', name: 'Late loan', overrides: { 'loans.L1.disbursementDate': '2031-06-01' } };
     const p = completePlan(p => { p.loans[0].requiredPayment = { graceMonths: 6 }; p.scenarios = [scenario]; });
     const ctx = contextFor(p);
     expect(ctx.comparisons?.scenarioFailures).toHaveLength(1); // precondition
     const r = getPlanReadiness(p, ctx);
     expectWellFormed(r);
-    expect(item(r, 'scenario.late.failed')).toMatchObject({ severity: 'invalid', target: { dashboard: 'scenarios', fieldId: 'scenarios.late.name' } });
-    expect(r.results.scenarioComparison.state).toBe('invalid');
+    expect(item(r, 'scenario.late.failed')).toBeUndefined();
+    expect(r.items.filter(i => i.target.fieldId.startsWith('scenarios.'))).toEqual([]);
     expect(r.results.debtFreeDate.state).toBe('complete');
+    expect(p.scenarios).toEqual([scenario]); // stored data untouched
   });
 
   it('a working scenario makes scenarioComparison available', () => {
@@ -444,12 +445,12 @@ describe('readiness: invalid states', () => {
     expect(r.items[0].severity).toBe('invalid');
   });
 
-  it('drafts are counted per dashboard for the sidebar badges', () => {
+  it('drafts are counted per destination for the tab badges', () => {
     const p = completePlan();
     const before = ready(p).byDashboard.loans ?? 0;
     const r = ready(p, { invalidFieldIds: ['loans.L1.annualRate', 'postGradIncome.monthlyDebtBudget'] });
     expect(r.byDashboard.loans).toBe(before + 1);
-    expect(r.byDashboard.repayment).toBe((ready(p).byDashboard.repayment ?? 0) + 1);
+    expect(r.byDashboard.results).toBe((ready(p).byDashboard.results ?? 0) + 1);
   });
 
   it('a leftover draft for a removed record is ignored', () => {
@@ -497,14 +498,24 @@ describe('readiness: fully complete plan', () => {
 });
 
 describe('readiness: field routing (US-501, US-905)', () => {
-  it('post-graduation earnings route to Repayment Plan; in-school job earnings stay on Income', () => {
-    const p = plan(p => { p.schoolYears[0].resources = [resource('job', 'job', '100.00')]; });
+  it('repayment inputs route to Results; dates, in-school work and aid/cost events to College Costs', () => {
+    const p = plan(p => {
+      p.schoolYears[0].resources = [resource('job', 'job', '100.00')];
+      p.lifeEvents = [event('raise', 'income', '65000.00'), event('bonus', 'windfall', '1000.00'), event('aid', 'aid', '500.00'), event('extra', 'expense', '500.00')];
+    });
     for (const field of ['monthlyDebtBudget', 'annualSalary', 'raiseAllocationPercent', 'monthlyTakeHome', 'monthlyExpenses']) {
-      expect(dashboardForFieldId(p, `postGradIncome.${field}`)).toBe('repayment');
+      expect(dashboardForFieldId(p, `postGradIncome.${field}`)).toBe('results');
     }
-    expect(dashboardForFieldId(p, `schoolYears.${p.schoolYears[0].id}.resources.job.amount`)).toBe('income');
-    expect(dashboardForFieldId(p, 'repayment.payoffTarget.date')).toBe('repayment');
-    expect(dashboardForFieldId(p, 'repayment.voluntaryStart.months')).toBe('repayment');
+    expect(dashboardForFieldId(p, `schoolYears.${p.schoolYears[0].id}.resources.job.amount`)).toBe('school');
+    expect(dashboardForFieldId(p, 'income-add-earnings')).toBe('school');
+    expect(dashboardForFieldId(p, 'settings.startDate')).toBe('school');
+    expect(dashboardForFieldId(p, 'repayment.payoffTarget.date')).toBe('results');
+    expect(dashboardForFieldId(p, 'repayment.voluntaryStart.months')).toBe('results');
+    expect(dashboardForFieldId(p, 'lifeEvents.raise.amount')).toBe('results');
+    expect(dashboardForFieldId(p, 'lifeEvents.bonus.amount')).toBe('results');
+    expect(dashboardForFieldId(p, 'lifeEvents.aid.amount')).toBe('school');
+    expect(dashboardForFieldId(p, 'lifeEvents.extra.amount')).toBe('school');
+    expect(dashboardForFieldId(p, 'scenarios.any.name')).toBeUndefined();
   });
 
   it('stored federal settings have no dashboard to open', () => {
@@ -522,7 +533,7 @@ describe('readiness: payoff target (US-506)', () => {
   });
   const feasible: TargetPaymentOutput = {
     status: 'feasible', requiredMonthlyBudget: '340.64', chosenMonthlyBudget: '340.64', difference: '0.00',
-    targetDate: '2041-01-01', verifiedDebtFreeDate: '2040-12-01', totalInterest: '10877.41', iterations: 30,
+    targetDate: '2041-01-01', verifiedDebtFreeDate: '2040-12-01', totalInterest: '10877.41', limitedByMinimum: false, iterations: 30,
   };
 
   it('budget mode: the target result is not applicable and no target items appear', () => {
@@ -541,7 +552,7 @@ describe('readiness: payoff target (US-506)', () => {
     const p = withTarget(p => { p.repayment.payoffTarget = { mode: 'target', kind: 'date', date: '2020-01-01' }; });
     const r = ready(p, { target: { status: 'invalid', reason: 'pastTarget', errors: [], message: 'Choose a date in the future.' } });
     expectWellFormed(r);
-    expect(item(r, 'target.invalid')).toMatchObject({ severity: 'invalid', why: 'Choose a date in the future.', target: { dashboard: 'repayment', fieldId: 'repayment.payoffTarget.date' } });
+    expect(item(r, 'target.invalid')).toMatchObject({ severity: 'invalid', why: 'Choose a date in the future.', target: { dashboard: 'results', fieldId: 'repayment.payoffTarget.date' } });
     expect(r.results.targetPayment.state).toBe('invalid');
     expect(r.results.debtFreeDate.state).toBe('complete'); // the chosen-budget projection is unaffected
   });
@@ -549,7 +560,7 @@ describe('readiness: payoff target (US-506)', () => {
   it('an unreachable target is a warning that links to the duration field', () => {
     const r = ready(withTarget(), { target: { status: 'infeasible', reason: 'beyondSimulationCap', message: 'No payment reaches it.' } });
     expectWellFormed(r);
-    expect(item(r, 'target.infeasible')).toMatchObject({ severity: 'warning', target: { dashboard: 'repayment', fieldId: 'repayment.payoffTarget.months' } });
+    expect(item(r, 'target.infeasible')).toMatchObject({ severity: 'warning', target: { dashboard: 'results', fieldId: 'repayment.payoffTarget.months' } });
   });
 
   it('missing inputs link to the field the solver names', () => {
@@ -597,7 +608,7 @@ describe('readiness: required-payment timing (US-507)', () => {
     const r = getPlanReadiness(p, ctx);
     expectWellFormed(r);
     expect(item(r, 'missed.L1')).toMatchObject({
-      severity: 'warning', target: { dashboard: 'repayment', fieldId: 'repayment.voluntaryStart.months' },
+      severity: 'warning', target: { dashboard: 'results', fieldId: 'repayment.voluntaryStart.months' },
       secondaryAction: { target: { dashboard: 'loans', fieldId: 'loans.L1.requiredPayment.firstDueDate' } },
     });
   });

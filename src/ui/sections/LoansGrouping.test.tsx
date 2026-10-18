@@ -210,9 +210,11 @@ describe('Group by academic year', () => {
   it('opens a gap-created loan inside its academic year', async () => {
     const user = userEvent.setup();
     writeLoanGroupingPreference(true);
-    const view = renderPlanner({ plan: yearsPlan() });
-    navigate('Costs');
-    await user.click(screen.getByRole('button', { name: 'Create loan from gap for Year 1' }));
+    const plan = yearsPlan();
+    plan.loans[2] = { ...plan.loans[2], principal: '500.00' }; // Year 1 still needs $500
+    const view = renderPlanner({ plan });
+    navigate('College Costs');
+    await user.click(screen.getByRole('button', { name: /^Create loan .*for Year 1$/ }));
     const loan = view.plan().loans[3];
     expect(loan.academicYear).toBe('2026-2027');
     expect(yearOpen('2026-2027') && isOpen(loan.id)).toBe(true);

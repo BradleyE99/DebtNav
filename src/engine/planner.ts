@@ -78,7 +78,7 @@ function yearIndexForDate(plan: PlannerPlan, date: string): number {
     date >= year.startDate && (date < year.endDate || (index === last && date === year.endDate)));
 }
 /** An explicit schoolYearId wins when it still exists; otherwise the date decides. */
-function attributedYearIndex(plan: PlannerPlan, schoolYearId: string | undefined, date: string): number {
+export function attributedYearIndex(plan: PlannerPlan, schoolYearId: string | undefined, date: string): number {
   const explicit = schoolYearId === undefined ? -1 : plan.schoolYears.findIndex(year => year.id === schoolYearId);
   return explicit >= 0 ? explicit : yearIndexForDate(plan, date);
 }
@@ -173,6 +173,16 @@ const DEFAULT_TERM_MONTHS = 120;
  * records the year and the amount at creation and is never updated automatically afterwards.
  * Rate defaults to the current undergraduate Direct Loan rate from policy reference data.
  */
+/** Borrowing a year still needs: max(0, gap + buffer − loans already allocated to it). Prefills "Create loan". */
+export function borrowingStillNeeded(summary: Pick<YearSummary, 'bufferedGap' | 'borrowed'>): Money {
+  return money(D.max(0, new D(summary.bufferedGap).minus(summary.borrowed)));
+}
+
+/**
+ * A new loan for a school year, pre-filled with the borrowing that year still needs (gap + buffer minus
+ * the loans already allocated to it). gapAtCreation records the gap + buffer at creation, so a later gap
+ * change is flagged on the loan (the loan itself never changes automatically).
+ */
 export function createLoanFromGap(plan: PlannerPlan, yearId: string, newId: string): PlannerLoan {
   const index = plan.schoolYears.findIndex(year => year.id === yearId);
   const year = plan.schoolYears[index];
@@ -183,8 +193,13 @@ export function createLoanFromGap(plan: PlannerPlan, yearId: string, newId: stri
   };
   if (!year) return base;
   let amount = '0.00';
-  try { amount = summarizeYear(plan, year, index).bufferedGap; } catch { /* incomplete inputs: start from 0.00 */ }
-  return { ...base, principal: amount, schoolYearId: year.id, academicYear: academicYearOfSchoolYear(year), gapAtCreation: amount };
+  let gap = '0.00';
+  try {
+    const summary = summarizeYear(plan, year, index);
+    gap = summary.bufferedGap;
+    amount = borrowingStillNeeded(summary);
+  } catch { /* incomplete inputs: start from 0.00 */ }
+  return { ...base, principal: amount, schoolYearId: year.id, academicYear: academicYearOfSchoolYear(year), gapAtCreation: gap };
 }
 
 // ------------------------------------------------------------------ Validation of planner-only fields
@@ -241,6 +256,13 @@ function windfallOccurrences(event: LifeEvent, lastDate: string): string[] {
   return dates;
 }
 
+/** C4: the part of one windfall occurrence put toward debt (rounded to cents) and the part kept. */
+export function windfallSplit(event: Pick<LifeEvent, 'amount' | 'allocationPercent'>): { toDebt: Money; kept: Money } {
+  const amount = new D(event.amount);
+  const toDebt = cents(amount.times(new D(event.allocationPercent).div(100)));
+  return { toDebt: toDebt.toFixed(2), kept: amount.minus(toDebt).toFixed(2) };
+}
+
 /**
  * Monthly debt budget for each repayment month, precomputed once per projection.
  *  - Base: monthlyDebtBudget + extraMonthlyPayment.
@@ -252,7 +274,7 @@ function windfallOccurrences(event: LifeEvent, lastDate: string): string[] {
  *    month are held and applied in repayment month 1. Yearly windfalls repeat on each anniversary
  *    until recurrenceEndDate, the horizon, or payoff.
  */
-interface BudgetSchedule { budgetFor: (date: string) => Decimal; stableFrom: string }
+interface BudgetSchedule { budgetFor: (date: string) => Decimal; windfallFor: (date: string) => Decimal; regularFor: (date: string) => Decimal; stableFrom: string }
 function budgetSchedule(plan: PlannerPlan, firstPaymentDate: string, horizon: number): BudgetSchedule {
   const events = [...plan.lifeEvents].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const firstKey = monthKey(firstPaymentDate);
@@ -271,7 +293,7 @@ function budgetSchedule(plan: PlannerPlan, firstPaymentDate: string, horizon: nu
   const windfalls = new Map<string, Decimal>();
   for (const event of events) {
     if (event.type !== 'windfall') continue;
-    const amount = cents(new D(event.amount).times(new D(event.allocationPercent).div(100)));
+    const amount = new D(windfallSplit(event).toDebt);
     for (const date of windfallOccurrences(event, lastDate)) {
       const key = monthKey(date) < firstKey ? firstKey : monthKey(date);
       windfalls.set(key, (windfalls.get(key) ?? new D(0)).plus(amount));
@@ -287,21 +309,71 @@ function budgetSchedule(plan: PlannerPlan, firstPaymentDate: string, horizon: nu
 
   // Each month's budget is computed once; projections ask for consecutive months only.
   const byMonth = new Map<string, Decimal>();
+  const zero = new D(0);
+  const regularFor = (date: string) => {
+    const key = monthKey(date);
+    let budget = base;
+    for (const change of incomeChanges) if (change.key <= key) budget = budget.plus(change.delta);
+    return cents(D.max(0, budget));
+  };
   return {
     budgetFor: (date: string) => {
       const key = monthKey(date);
       const cached = byMonth.get(key);
       if (cached) return cached;
-      let budget = base;
-      for (const change of incomeChanges) if (change.key <= key) budget = budget.plus(change.delta);
-      const regular = cents(D.max(0, budget));
+      const regular = regularFor(date);
       const windfall = windfalls.get(key);
       const total = windfall ? regular.plus(windfall) : regular;
       byMonth.set(key, total);
       return total;
     },
+    windfallFor: (date: string) => windfalls.get(monthKey(date)) ?? zero,
+    regularFor,
     stableFrom: `${lastChange}-01`,
   };
+}
+
+/** One income change and the regular monthly payment it produces (D5: shown on each income-change row). */
+export interface BudgetStep {
+  eventId: string;
+  /** Date of the first payment the change applies to (events before the first payment apply from it). */
+  from: string;
+  /** Regular monthly amount for loans just before and from this change (floored at $0, cents). */
+  before: Money;
+  after: Money;
+}
+
+/**
+ * The regular monthly amount for loans over time, one step per income-change event, from the same
+ * budget schedule the projection uses (no second engine). Empty when the start date is invalid.
+ */
+export function budgetTimeline(plan: PlannerPlan): BudgetStep[] {
+  const start = voluntaryStartDate(plan);
+  if (!validDate(start) || !validDate(addMonths(start, SIMULATION_CAP_MONTHS + 1))) return [];
+  const firstPaymentDate = addMonths(start, 1);
+  let schedule: BudgetSchedule;
+  try { schedule = budgetSchedule(plan, firstPaymentDate, SIMULATION_CAP_MONTHS); } catch { return []; }
+  const firstKey = monthKey(firstPaymentDate);
+  const steps: BudgetStep[] = [];
+  const events = plan.lifeEvents.filter(event => event.type === 'income' && validDate(event.date))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+  for (const event of events) {
+    // The first payment in (or after) the event's calendar month.
+    const months = Math.max(0, monthsBetweenKeys(firstKey, monthKey(event.date)));
+    const from = addMonths(firstPaymentDate, months);
+    try {
+      const before = months === 0 ? cents(D.max(0, baseMonthlyBudget(plan))) : schedule.regularFor(addMonths(firstPaymentDate, months - 1));
+      steps.push({ eventId: event.id, from, before: money(before), after: money(schedule.regularFor(from)) });
+    } catch { /* invalid amounts are reported by validation */ }
+  }
+  return steps;
+}
+
+/** Calendar months from one 'YYYY-MM' key to another (negative when `to` is earlier). */
+function monthsBetweenKeys(from: string, to: string): number {
+  const [fy, fm] = from.split('-').map(Number);
+  const [ty, tm] = to.split('-').map(Number);
+  return (ty - fy) * 12 + (tm - fm);
 }
 
 /**
@@ -331,6 +403,7 @@ export function repaymentFor(plan: PlannerPlan, strategyId: string = plan.repaym
     strategy: getStrategy(strategyId, { customOrder: plan.repayment.customOrder }),
     capitalizeInterestByLoan: Object.fromEntries(plan.loans.map(loan => [loan.id, loan.capitalizeInterest !== false])),
     monthlyBudget: schedule?.budgetFor,
+    monthlyWindfall: schedule?.windfallFor,
     budgetStableFrom: schedule?.stableFrom,
     voluntaryStartDate: start,
     firstRequiredPaymentByLoan: firstRequired,

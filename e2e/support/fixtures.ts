@@ -99,6 +99,32 @@ export async function secondDevice(context: BrowserContext, user: string): Promi
   return page;
 }
 
+/** Pages folded into the four destinations: their old ids open the new home with every section expanded. */
+const LEGACY_DESTINATIONS: Record<string, string> = { setup: 'school', income: 'school', repayment: 'results', events: 'results', scenarios: 'results', federal: 'results' };
+
+/** Opens every collapsed section of the current destination (as a user expanding them would). */
+export async function openSections(page: Page): Promise<void> {
+  await page.evaluate(() => { for (const detail of document.querySelectorAll<HTMLDetailsElement>('main details')) detail.open = true; });
+}
+
+/**
+ * Opens a destination through its tab. Old page ids (repayment, income, …) open their new home with all
+ * sections expanded; 'data' opens Account → Your data. An open dialog is closed first.
+ */
+export async function goTo(page: Page, id: string): Promise<void> {
+  if (await page.getByRole('dialog').count()) await page.keyboard.press('Escape');
+  if (id === 'data') {
+    await page.getByRole('button', { name: /^Account/ }).click();
+    await page.getByRole('button', { name: 'Your data', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Your data' })).toBeVisible();
+    return;
+  }
+  const target = LEGACY_DESTINATIONS[id] ?? id;
+  await page.getByRole('navigation', { name: 'Planner sections' }).locator(`a[href="#${target}"]`).click();
+  await expect(page.locator('.dashboard')).toHaveAttribute('data-dashboard', target);
+  if (target !== id) await openSections(page);
+}
+
 /** Fixture: `user` is a fresh unique account per test; `signedIn` opens the planner as that user. */
 export const test = base.extend<{ user: string; signedIn: Page }>({
   user: async ({}, provide, testInfo) => { await provide(uniqueUser(testInfo)); }, // eslint-disable-line no-empty-pattern

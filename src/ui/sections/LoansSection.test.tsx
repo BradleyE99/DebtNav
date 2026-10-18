@@ -97,8 +97,8 @@ describe('loan cards', () => {
   it('opens a loan created from a year gap', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: { ...samplePlan(), loans: [], repayment: { ...samplePlan().repayment, customOrder: [] } } });
-    navigate('Costs');
-    await user.click(screen.getByRole('button', { name: 'Create loan from gap for Year 1' }));
+    navigate('College Costs');
+    await user.click(screen.getByRole('button', { name: /^Create loan .*for Year 1$/ }));
     const [loan] = view.plan().loans;
     expect(isOpen(loan.id)).toBe(true);
     expect(document.activeElement?.id).toBe(`loans.${loan.id}.name`);
@@ -191,22 +191,25 @@ describe('loan cards', () => {
 
   it('opens a gap-created loan while retaining valid edits across dashboards', async () => {
     const user = userEvent.setup();
-    const view = renderPlanner({ plan: samplePlan() });
+    // Beta loan pays for the next academic year, so Year 1 ($6,000 gap) still needs $6,000 − Alpha loan.
+    const base = samplePlan();
+    const view = renderPlanner({ plan: { ...base, loans: base.loans.map(loan => loan.id === 'loan-b' ? { ...loan, academicYear: '2027-2028' } : loan) } });
     await user.click(toggle('loan-a'));
     const principal = byId('loans.loan-a.principal');
     await user.clear(principal);
-    await user.type(principal, '6100');
-    navigate('Costs');
-    await user.click(screen.getByRole('button', { name: 'Create loan from gap for Year 1' }));
+    await user.type(principal, '1100');
+    navigate('College Costs');
+    await user.click(screen.getByRole('button', { name: /^Create loan .*for Year 1$/ }));
     const loan = view.plan().loans[2];
     expect(isOpen(loan.id)).toBe(true);
     expect(document.activeElement?.id).toBe(`loans.${loan.id}.name`);
     expect(isOpen('loan-a')).toBe(false);
     expect(isOpen('loan-b')).toBe(false);
     await user.click(toggle('loan-a'));
-    expect(byId('loans.loan-a.principal').value).toBe('6,100.00');
-    expect(view.plan().loans[0].principal).toBe('6100.00');
-    expect(view.plan().loans[2].principal).toBe('6000.00');
+    expect(byId('loans.loan-a.principal').value).toBe('1,100.00');
+    expect(view.plan().loans[0].principal).toBe('1100.00');
+    // Prefilled with what the year still needs: gap + buffer − loans already allocated to it.
+    expect(view.plan().loans[2].principal).toBe('4900.00');
   });
 
   it('expands the loan that holds a revealed field', async () => {

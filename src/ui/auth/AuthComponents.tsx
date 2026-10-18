@@ -22,7 +22,7 @@ export function PublicOverview({ signIn, notice }: { signIn: ReactNode; notice?:
           <OverviewContent headingId="public-overview-heading" heading="Plan your student loans">
             <div className="public-signin">
               {signIn}
-              <p className="field-hint">Sign in to create your plan. It is saved to your DebtNav account so you can continue on any device.</p>
+              <p className="field-hint">Sign in to create your plan. It is saved to your account, on any device.</p>
             </div>
           </OverviewContent>
         </section>
@@ -88,20 +88,6 @@ export function AuthError({ message, onRetry }: { message?: string | null; onRet
       <span className="notice-icon" aria-hidden="true">!</span>
       <p><strong>DebtNav can't reach its server right now.</strong> {message ?? 'Check your connection and try again.'}</p>
       {onRetry && <button type="button" onClick={onRetry}>Try again</button>}
-    </div>
-  );
-}
-
-/** Signed-in header: account email + Sign out (sign-out never deletes the saved plan). */
-export function AccountHeader({ email, onSignOut, busy = false }: { email: string | null; onSignOut(): void; busy?: boolean }) {
-  return (
-    <div className="account-header">
-      <span className="account-header__email" title={email ?? undefined}>
-        <span className="visually-hidden">Signed in as </span>{email ?? 'Signed in'}
-      </span>
-      <button type="button" className="account-header__signout" onClick={onSignOut} disabled={busy}
-        aria-describedby="account-signout-hint">Sign out</button>
-      <span id="account-signout-hint" className="visually-hidden">Your saved plan stays on your account.</span>
     </div>
   );
 }

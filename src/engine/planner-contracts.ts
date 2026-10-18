@@ -166,7 +166,9 @@ export interface MissedObligationWarning {
 /** US-506 target solver result (src/engine/targetPayment.ts, run off the main thread). */
 export type TargetPaymentResult =
   | { status: 'feasible'; requiredMonthlyBudget: Money; chosenMonthlyBudget: Money; /** required − chosen */ difference: Money;
-      targetDate: ISODate; verifiedDebtFreeDate: ISODate; totalInterest: Money; iterations: number }
+      targetDate: ISODate; verifiedDebtFreeDate: ISODate; totalInterest: Money;
+      /** D1: true when the required minimums alone reach the target (the answer is their sum). */
+      limitedByMinimum: boolean; iterations: number }
   | { status: 'infeasible'; reason: 'targetBeforeFirstPayment' | 'beyondSimulationCap' | 'noBudgetReachesTarget'; message: string }
   | { status: 'invalid'; reason: 'pastTarget' | 'missingInputs' | 'invalidTarget'; errors: FieldError[]; message: string };
 export interface TimelineEntry { id: string; date: ISODate; label: string; type: 'school' | 'graduation' | 'repayment' | 'event' | 'payoff' }

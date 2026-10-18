@@ -5,19 +5,26 @@ import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { PlannerStore, UndoHistory as History } from '../../engine/planner-contracts';
 import { navigateTo, renderPlanner, samplePlan } from '../testing/renderPlanner';
-import { UndoHistory } from './UndoHistory';
+import { UndoHistory, UndoHistoryPanel } from './UndoHistory';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); window.history.replaceState(null, '', '/'); });
 
 const group = () => screen.getByRole('group', { name: 'Undo' });
 const undoButton = () => within(group()).getByRole('button', { name: 'Undo' }) as HTMLButtonElement;
+/** Opens Account → Undo history and returns the dialog. */
+async function openHistory(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: /^Account/ }));
+  await user.click(screen.getByRole('button', { name: 'Undo history' }));
+  return screen.getByRole('dialog', { name: 'Undo history' });
+}
 
 describe('in the planner', () => {
-  it('is visible and disabled with clear text when nothing can be undone', () => {
+  it('is visible and disabled with clear text when nothing can be undone', async () => {
+    const user = userEvent.setup();
     renderPlanner({ plan: samplePlan() });
     expect(undoButton().disabled).toBe(true);
     expect(group().textContent).toContain('Nothing to undo');
-    expect(within(group()).getByRole('button', { name: 'History (0)' })).toBeTruthy();
+    expect((await openHistory(user)).textContent).toContain('No changes to undo in this session yet.');
   });
 
   it('never expires on a timer or after later edits; undoes newest first (LIFO)', async () => {
@@ -25,7 +32,7 @@ describe('in the planner', () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const view = renderPlanner({ plan: samplePlan() });
     navigateTo('repayment');
-    const budget = screen.getByLabelText('Monthly debt budget (your chosen payment)');
+    const budget = screen.getByLabelText('Monthly payment');
     await user.clear(budget);
     await user.type(budget, '700');
     navigateTo('loans');
@@ -53,11 +60,13 @@ describe('in the planner', () => {
     await user.click(within(document.getElementById('loans.loan-b-heading')!).getByRole('button'));
     await user.click(screen.getByRole('button', { name: 'Remove loan Beta loan' }));
     expect(view.plan().loans).toHaveLength(1);
-    await user.click(within(group()).getByRole('button', { name: /History/ }));
-    expect(within(group()).getByRole('button', { name: /History/ }).getAttribute('aria-expanded')).toBe('true');
-    expect(within(group()).getByRole('listitem').textContent).toContain('Remove loan "Beta loan"');
-    await user.click(undoButton());
+    const dialog = await openHistory(user);
+    expect(within(dialog).getByRole('listitem').textContent).toContain('Remove loan "Beta loan"');
+    await user.click(within(dialog).getByRole('button', { name: 'Undo latest change' }));
     expect(JSON.stringify(view.plan().loans)).toBe(before);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(undoButton().disabled).toBe(true);
   });
 
   it('JSON import replacement can be undone; deletion is not in the history', async () => {
@@ -79,25 +88,25 @@ describe('component', () => {
     return { history, undo: null } as unknown as PlannerStore;
   }
 
-  it('Undo and History are keyboard operable; Clear history empties the list without changing the plan', async () => {
+  it('Undo is keyboard operable; the history panel lists newest first and Clear history keeps the plan', async () => {
     const user = userEvent.setup();
     const undo = vi.fn();
     const clear = vi.fn();
-    const entries = [{ id: '1', label: 'Change monthly debt budget', at: '2026-10-16T10:00:00.000Z' }, { id: '2', label: 'Add loan', at: '2026-10-16T10:01:00.000Z' }];
-    render(<UndoHistory store={fakeStore({ entries, canUndo: true, undo, clear })} />);
+    const entries = [{ id: '1', label: 'Change monthly payment', at: '2026-10-16T10:00:00.000Z' }, { id: '2', label: 'Add loan', at: '2026-10-16T10:01:00.000Z' }];
+    const history = { entries, canUndo: true, undo, clear };
+    const { unmount } = render(<UndoHistory store={fakeStore(history)} />);
     expect(group().textContent).toContain('Last change: Add loan');
     undoButton().focus();
     await user.keyboard('{Enter}');
     expect(undo).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('status').textContent).toBe('Undone: Add loan.');
-    const toggle = within(group()).getByRole('button', { name: 'History (2)' });
-    toggle.focus();
-    await user.keyboard('{Enter}');
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    const items = within(group()).getAllByRole('listitem');
-    expect(items.map(item => item.textContent?.split(/\d/)[0])).toEqual(['Add loan', 'Change monthly debt budget']);
+    unmount();
+
+    render(<UndoHistoryPanel store={fakeStore(history)} />);
+    const items = screen.getAllByRole('listitem');
+    expect(items.map(item => item.textContent?.split(/\d/)[0])).toEqual(['Add loan', 'Change monthly payment']);
     expect(items[0].getAttribute('aria-current')).toBe('step');
-    await user.click(within(group()).getByRole('button', { name: 'Clear history' }));
+    await user.click(screen.getByRole('button', { name: 'Clear history' }));
     expect(clear).toHaveBeenCalled();
     expect(screen.getByRole('status').textContent).toMatch(/plan was not changed/);
   });

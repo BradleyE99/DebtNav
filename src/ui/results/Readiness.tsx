@@ -78,6 +78,8 @@ interface ResultFigureProps {
   testId?: string;
   /** Show the action button for incomplete / invalid / non-payoff states. */
   action?: boolean;
+  /** Show the non-payoff reason next to the value (off where the checklist already states it). */
+  reason?: boolean;
 }
 
 /**
@@ -85,7 +87,7 @@ interface ResultFigureProps {
  * complete → value; estimate → value + "Estimate" chip; incomplete/invalid → placeholder + action;
  * nonPayoff → "Not paid off" + reason + action; notApplicable → neutral note.
  */
-export function ResultFigure({ result, value, nonPayoffValue = 'Not paid off', testId, action = true }: ResultFigureProps) {
+export function ResultFigure({ result, value, nonPayoffValue = 'Not paid off', testId, action = true, reason = true }: ResultFigureProps) {
   const { readiness } = usePlanner();
   const status = readiness.results[result];
   const item = readiness.items.find(entry => entry.id === status.itemIds[0]);
@@ -98,7 +100,7 @@ export function ResultFigure({ result, value, nonPayoffValue = 'Not paid off', t
     <span className={`result-figure result-figure--${status.state}`} data-state={status.state}>
       <span className="figure-value" data-testid={testId} data-state={status.state}>{text}</span>
       {status.state === 'estimate' && <span className="chip chip--estimate" title={status.summary}>Estimate<span className="visually-hidden">: {status.summary?.replace(/^Estimate: /, '')}</span></span>}
-      {status.state === 'nonPayoff' && status.summary && <span className="figure-reason">{status.summary.replace(/^Not paid off: /, '')}</span>}
+      {reason && status.state === 'nonPayoff' && status.summary && <span className="figure-reason">{status.summary.replace(/^Not paid off: /, '')}</span>}
       {action && item && (status.state === 'incomplete' || status.state === 'invalid' || status.state === 'nonPayoff') && (
         <button type="button" className="link-button figure-action" onClick={() => goToTarget(item.target)}>{item.actionLabel}</button>
       )}

@@ -38,7 +38,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     navigateTo('school', true);
     const id = `schoolYears.${yearId}.costItems.cost-1.amount`;
     const field = byId(id);
-    expect(figure(yearCard(), 'Funding gap (a calculation, not a recommendation)')).toBe('$6,000.00');
+    expect(figure(yearCard(), 'Funding gap')).toBe('$6,000.00');
 
     await user.click(field);
     await user.clear(field);
@@ -55,7 +55,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     await user.type(field, '$15,500.25');
     expect(field.getAttribute('aria-invalid')).toBeNull();
     expect(view.plan().schoolYears[0].costItems[0].amount).toBe('15500.25');
-    expect(figure(yearCard(), 'Funding gap (a calculation, not a recommendation)')).toBe('$11,500.25');
+    expect(figure(yearCard(), 'Funding gap')).toBe('$11,500.25');
     expectNoCalculateButton();
   });
 
@@ -78,7 +78,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     await user.clear(field);
     await user.type(field, '5');
     expect(field.getAttribute('aria-invalid')).toBeNull();
-    expect(figure(yearCard(), 'Gap + your buffer')).toBe('$6,300.00');
+    expect(yearCard().querySelector('.buffer-control .computed')?.textContent).toBe('Gap + buffer: $6,300.00');
   });
 
   it('rate: loan interest rate shown as percent, stored as a fraction', async () => {
@@ -184,9 +184,8 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     expect(field.getAttribute('aria-invalid')).toBeNull();
     expect(view.plan().loans[0].name).toBe('Stafford');
     expect(byId('loans.loan-a-heading').textContent).toContain('Stafford');
-    navigateTo('results');
-    await user.selectOptions(screen.getByLabelText('Explore results'), 'loans');
-    expect(within(screen.getByRole('region', { name: 'Loans at repayment table' })).getByText('Stafford')).toBeTruthy();
+    navigateTo('results', true);
+    expect(within(screen.getByRole('region', { name: 'Required payment dates table' })).getByText('Stafford')).toBeTruthy();
   });
 
   it('select: loan type changes in-school interest', async () => {
@@ -228,7 +227,7 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     const user = userEvent.setup();
     const first = renderPlanner({ plan: samplePlan() });
     navigateTo('repayment');
-    const salary = screen.getByLabelText('Gross annual salary (before taxes)') as HTMLInputElement;
+    const salary = screen.getByLabelText('Salary (before tax)') as HTMLInputElement;
     await user.click(salary);
     await user.clear(salary);
     await user.type(salary, '61,250');
@@ -238,6 +237,6 @@ describe('field types: clear, invalid text, valid typing, live results', () => {
     cleanup();
     renderPlanner({ storage });
     navigateTo('repayment');
-    expect((screen.getByLabelText('Gross annual salary (before taxes)') as HTMLInputElement).value).toBe('61,250.00');
+    expect((screen.getByLabelText('Salary (before tax)') as HTMLInputElement).value).toBe('61,250.00');
   });
 });

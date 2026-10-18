@@ -1,5 +1,5 @@
 import type { Page, Locator } from '@playwright/test';
-import { test, expect, openPlanner } from './support/fixtures';
+import { test, expect, goTo, openPlanner } from './support/fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 // Readiness checklist journey in a real browser (tester): a new user opens Results, sees what is
@@ -9,12 +9,7 @@ import AxeBuilder from '@axe-core/playwright';
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 const MONTH_YEAR = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{4}(?!\d)/;
 
-async function go(page: Page, id: string) {
-  const menu = page.getByRole('button', { name: 'Menu', exact: true });
-  if (await menu.isVisible()) await menu.click();
-  await page.locator('nav a[href="#' + id + '"]').click();
-  await expect(page.locator('.dashboard')).toHaveAttribute('data-dashboard', id);
-}
+const go = goTo;
 async function retype(page: Page, field: Locator, value: string) {
   await field.click();
   await page.keyboard.press('Control+A');
@@ -57,17 +52,17 @@ test('empty plan: Results explains what is missing and shows no misleading figur
   await expect(row(page, 'loans.none')).toBeVisible();
   await expect(row(page, 'costs.none')).toBeVisible();
   await expect(row(page, 'loans.none')).toContainText(/debt-free/i);
-  for (const id of ['key-debt-free', 'key-interest', 'key-gap']) {
+  for (const id of ['headline-total-debt', 'headline-debt-free', 'headline-time', 'headline-interest']) {
     const figure = page.getByTestId(id);
     if (await figure.count()) {
       await expect(figure.first()).not.toHaveText(MONTH_YEAR);
       await expect(figure.first()).not.toHaveText(/\$0\.00/);
     }
   }
+  // The Introduction repeats no figures; it states what is needed and continues there.
   await go(page, 'overview');
-  await expect(page.getByTestId('key-debt-free')).not.toHaveText(MONTH_YEAR);
-  await expect(page.getByTestId('key-interest')).not.toHaveText(/\$0\.00/);
-  await expect(row(page, 'loans.none')).toBeVisible();
+  await expect(page.locator('main .result-figure')).toHaveCount(0);
+  await expect(page.locator('main')).toContainText('2 items needed');
 });
 
 test('completion journey: follow each action, enter the value, return, and see results update; persists after reload', async ({ page }) => {
@@ -111,10 +106,8 @@ test('completion journey: follow each action, enter the value, return, and see r
   await expect(page.locator('main')).toContainText(MONTH_YEAR);
   await expect(page.locator('main [data-state="estimate"]').first()).toBeVisible();
   await expect(page.locator('main .chip--estimate').first()).toBeVisible();
-  await go(page, 'overview');
-  await expect(page.getByTestId('key-debt-free')).toHaveText(MONTH_YEAR);
-  await expect(page.getByTestId('key-debt-free')).toHaveAttribute('data-state', 'estimate');
-  await go(page, 'results');
+  await expect(page.getByTestId('headline-debt-free')).toHaveText(MONTH_YEAR);
+  await expect(page.getByTestId('headline-debt-free')).toHaveAttribute('data-state', 'estimate');
 
   // 5. Reload keeps everything.
   const before = await status(page).textContent();
@@ -136,7 +129,7 @@ test('budget states: confirm default, below interest (not paid off), zero (missi
   const assumptions = page.locator('main details', { hasText: /check these assumptions/i }).first();
   await assumptions.locator(':scope > summary').click();
   await row(page, 'budget.default').getByRole('button').click();
-  await expect(page).toHaveURL(/#repayment$/);
+  await expect(page).toHaveURL(/#results$/);
   await expect.poll(() => focusedId(page)).toBe('postGradIncome.monthlyDebtBudget');
   const budget = page.locator('[id="postGradIncome.monthlyDebtBudget"]');
 
@@ -148,7 +141,7 @@ test('budget states: confirm default, below interest (not paid off), zero (missi
   await expect(notPaid).toContainText(/not paid off|no debt-free date/i);
   await expect(notPaid).not.toContainText(MONTH_YEAR);
   await expect(row(page, 'repayment.nonPayoff')).toHaveCount(1);
-  await expect(notPaid.getByRole('button')).toHaveText(/budget/i);
+  await expect(notPaid.getByRole('button')).toHaveText(/monthly payment/i);
   await notPaid.getByRole('button').click();
   await expect.poll(() => focusedId(page)).toBe('postGradIncome.monthlyDebtBudget');
 
@@ -162,10 +155,9 @@ test('budget states: confirm default, below interest (not paid off), zero (missi
   await retype(page, budget, '300');
   await go(page, 'results');
   await expect(row(page, 'budget.zero')).toHaveCount(0);
-  await expect(page.locator('main')).toContainText(/short of the minimum/i); // $300: above interest (~$207), below the ~$435 minimum
-  await go(page, 'overview');
-  await expect(page.getByTestId('key-debt-free')).toHaveAttribute('data-state', 'complete');
-  await expect(page.getByTestId('key-debt-free')).toHaveText(MONTH_YEAR);
+  await expect(page.locator('main')).toContainText(/below the required minimums/i); // $300: above interest (~$207), below the ~$435 minimum
+  await expect(page.getByTestId('headline-debt-free')).toHaveAttribute('data-state', 'complete');
+  await expect(page.getByTestId('headline-debt-free')).toHaveText(MONTH_YEAR);
 });
 
 test('keyboard: checklist actions are reachable with Tab and activate with Enter', async ({ page }) => {
@@ -198,7 +190,7 @@ test('360 px and 200% zoom (720×450): checklist and figures fit without clippin
     await page.setViewportSize(viewport);
     for (const id of ['results', 'overview']) {
       await go(page, id);
-      await expect(row(page, 'loans.none')).toBeVisible();
+      if (id === 'results') await expect(row(page, 'loans.none')).toBeVisible();
       await noOverflow(page);
       await noClipping(page);
     }

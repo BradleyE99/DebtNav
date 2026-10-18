@@ -11,16 +11,16 @@ const card = (page: Page, n: number) => cards(page).nth(n - 1);
 const toggle = (target: Locator) => target.locator('h3 button');
 const details = (target: Locator) => target.locator('.loan-card__details');
 const field = (target: Locator, suffix: string) => target.locator(`[id$=".${suffix}"]`);
+/** Term, required-payment terms and interest options are under each card's "Advanced" disclosure. */
+const advanced = (target: Locator) => target.locator('details.loan-card__advanced');
 async function navigate(page: Page, name: string) {
-  const menu = page.getByRole('button', { name: 'Menu', exact: true });
-  if (await menu.isVisible()) await menu.click();
   await page.getByRole('navigation', { name: 'Planner sections' }).getByRole('link', { name, exact: true }).click();
 }
 async function readResults(page: Page) {
-  await navigate(page, 'Overview');
-  const interest = await page.getByTestId('key-interest').innerText();
-  const debtFree = await page.getByTestId('key-debt-free').innerText();
-  await navigate(page, 'Loans');
+  await navigate(page, 'Results');
+  const interest = await page.getByTestId('headline-interest').innerText();
+  const debtFree = await page.getByTestId('headline-debt-free').innerText();
+  await navigate(page, 'Loan Amounts');
   return { interest, debtFree };
 }
 
@@ -79,7 +79,7 @@ async function addTwoLoans(page: Page) {
 test.beforeEach(async ({ page, user }) => {
   await openPlanner(page, user);
   await expect(page.getByRole('heading', { name: 'Estimates, not financial advice' })).toHaveCount(0);
-  await navigate(page, 'Loans');
+  await navigate(page, 'Loan Amounts');
 });
 
 test('summaries, collapsed on load, individual, bulk, and keyboard toggling', async ({ page }) => {
@@ -113,6 +113,7 @@ test('summaries, collapsed on load, individual, bulk, and keyboard toggling', as
 
   // Clicking a field or a checkbox inside an open card does not toggle it.
   await field(card(page, 2), 'principal').click();
+  await advanced(card(page, 2)).locator(':scope > summary').click();
   await field(card(page, 2), 'capitalizeInterest').click();
   await expectExpanded(card(page, 2));
 
@@ -174,20 +175,21 @@ test('invalid text survives collapsing and the collapsed summary flags it', asyn
   await expect(toggle(first)).toContainText('Principal $6,000.00');
 });
 
-test('valid edits persist through collapse, sidebar navigation, and reload', async ({ page }) => {
+test('valid edits persist through collapse, tab navigation, and reload', async ({ page }) => {
   await addTwoLoans(page);
   const first = card(page, 1);
   await retype(page, field(first, 'principal'), '7250.5');
+  await advanced(first).locator(':scope > summary').click();
   await retype(page, field(first, 'termMonths'), '180');
   await page.keyboard.press('Tab');
   await expect(toggle(first)).toContainText('Principal $7,250.50');
   await toggle(first).click();
   await expectCollapsed(first);
 
-  // Use the sidebar to leave and return; valid values belong to the shared plan.
-  await navigate(page, 'Repayment Plan');
-  await expect(page).toHaveURL(/#repayment$/);
-  await navigate(page, 'Loans');
+  // Use the tabs to leave and return; valid values belong to the shared plan.
+  await navigate(page, 'Results');
+  await expect(page).toHaveURL(/#results$/);
+  await navigate(page, 'Loan Amounts');
   await expect(page).toHaveURL(/#loans$/);
   await expectCollapsed(first);
   await expectCollapsed(card(page, 2));
@@ -226,14 +228,15 @@ test('editing principal and rate updates the overview results', async ({ page })
 
 test('gap-created loans open for editing and deletion preserves the remaining card', async ({ page }) => {
   await addTwoLoans(page);
-  await navigate(page, 'Costs');
-  // "Create loan from gap" is disabled while the year's gap is $0.00 (no $0 loans); enter a cost first.
+  await navigate(page, 'College Costs');
+  // "Create loan" offers what Year 1 still needs (gap + buffer − its loans); with no costs it is disabled.
+  // $25,000 of costs − $17,500 of loans already for the year → $7,500.
   await page.getByRole('button', { name: 'Add Year 1 costs' }).click();
   await expect(page.locator('input[id$=".amount"]')).toBeFocused();
   await page.keyboard.press('Control+A');
-  await page.keyboard.type('4000');
+  await page.keyboard.type('25000');
   await page.keyboard.press('Tab');
-  await page.getByRole('button', { name: 'Create loan from gap for Year 1' }).click();
+  await page.getByRole('button', { name: /^Create loan for \$7,500\.00 for Year 1$/ }).click();
   await expect(cards(page)).toHaveCount(3);
   const gapLoan = card(page, 3);
   await expectExpanded(gapLoan);

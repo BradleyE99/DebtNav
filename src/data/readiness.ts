@@ -8,8 +8,8 @@ import type { PlannerOutputs, PlannerComparisonsDetailed } from '../engine/plann
 import { baseMonthlyBudget, createDefaultPlan, resourceGrossValue } from '../engine/planner';
 import { D } from '../engine/money';
 
-export type DashboardId = 'overview' | 'income' | 'setup' | 'school' | 'loans' | 'repayment'
-  | 'events' | 'scenarios' | 'federal' | 'results' | 'data';
+/** The four destinations (Introduction, College Costs, Loan Amounts, Results). */
+export type DashboardId = 'overview' | 'school' | 'loans' | 'results';
 
 export type ResultKey =
   | 'borrowingGap'        // per-year costs/resources/gap + total gap
@@ -110,7 +110,7 @@ const BUDGET_ESTIMATE_KEYS: ResultKey[] = ['debtFreeDate', 'totalInterest', 'pay
 const NON_PAYOFF_KEYS: ResultKey[] = ['debtFreeDate', 'totalInterest', 'paymentSchedule', 'balanceChart', 'strategyComparison', 'scenarioComparison', 'eventImpacts'];
 
 const SEVERITY_ORDER: Record<ReadinessSeverity, number> = { invalid: 0, missing: 1, warning: 2, assumption: 3 };
-const FLOW_ORDER: DashboardId[] = ['setup', 'school', 'income', 'loans', 'repayment', 'events', 'scenarios', 'overview', 'results', 'data', 'federal'];
+const FLOW_ORDER: DashboardId[] = ['school', 'loans', 'results', 'overview'];
 
 const isPrivateOrOther = (loan: PlannerLoan) => loan.type === 'private' || loan.type === 'other';
 /** US-507: private/other loan with no lender terms entered (no first due date, grace or in-school payments). */
@@ -160,18 +160,21 @@ export function fieldRecordExists(plan: PlannerPlan, fieldId: string): boolean {
   return true;
 }
 
-/** The dashboard that owns a field id (a contract field path or an action-button id). */
+/** The destination that owns a field id (a contract field path or an action-button id). */
 export function dashboardForFieldId(plan: PlannerPlan, fieldId: string): DashboardId | undefined {
   if (fieldId === 'loans-add') return 'loans';
-  if (fieldId === 'income-add-earnings') return 'income';
-  const [scope, second, collection, recordId] = fieldId.split('.');
-  // Stored federal settings have no editor in this release (US-905): there is no dashboard to send anyone to.
-  if (scope === 'borrower' || (scope === 'repayment' && ['annualAGI', 'familySize', 'federalPlan', 'mode'].includes(second))) return undefined;
-  if (scope === 'schoolYears' && collection === 'resources'
-    && plan.schoolYears.find(year => year.id === second)?.resources.some(resource => resource.id === recordId && resource.type === 'job')) return 'income';
+  if (fieldId === 'income-add-earnings') return 'school';
+  if (fieldId === 'lifeEvents-add-income' || fieldId === 'lifeEvents-add-windfall') return 'results';
+  if (fieldId === 'lifeEvents-add-aid' || fieldId === 'lifeEvents-add-expense') return 'school';
+  const [scope, second] = fieldId.split('.');
+  // Stored federal settings and scenarios have no editor (US-905, simplification): there is nowhere to send anyone.
+  if (scope === 'borrower' || scope === 'scenarios' || (scope === 'repayment' && ['annualAGI', 'familySize', 'federalPlan', 'mode'].includes(second))) return undefined;
+  if (scope === 'lifeEvents') {
+    const event = plan.lifeEvents.find(item => item.id === second);
+    return event && (event.type === 'aid' || event.type === 'expense') ? 'school' : 'results';
+  }
   return ({
-    postGradIncome: 'repayment', schoolYears: 'school', loans: 'loans', lifeEvents: 'events', settings: 'setup',
-    repayment: 'repayment', scenarios: 'scenarios',
+    postGradIncome: 'results', schoolYears: 'school', loans: 'loans', settings: 'school', repayment: 'results',
   } as Record<string, DashboardId>)[scope];
 }
 
@@ -215,22 +218,17 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
         ? 'Results can\'t be calculated until this is fixed.'
         : 'Repayment can\'t be projected until this is fixed. Borrowing gaps are still up to date.',
       blocks: outputs === null ? [...RESULT_KEYS] : PROJECTED_KEYS,
-      target: { dashboard: dashboardForFieldId(plan, fieldId) ?? 'setup', fieldId }, actionLabel: 'Fix this value',
+      target: { dashboard: dashboardForFieldId(plan, fieldId) ?? 'school', fieldId }, actionLabel: 'Fix this value',
     });
   }
-  for (const failure of context.comparisons?.scenarioFailures ?? []) {
-    add({
-      id: `scenario.${failure.id}.failed`, severity: 'invalid', label: `Scenario "${failure.name}" can't be projected`,
-      why: failure.reason || 'One of its changed values makes the plan impossible to project.',
-      blocks: ['scenarioComparison'], target: { dashboard: 'scenarios', fieldId: `scenarios.${failure.id}.name` }, actionLabel: 'Edit scenario',
-    });
-  }
+  // Scenarios are stored but have no editor in the simplified planner, so a scenario that can't be
+  // projected is not listed (it would send the user nowhere). Its data is kept unchanged.
   for (const fieldId of context.invalidFieldIds ?? []) {
     if (!fieldRecordExists(plan, fieldId) || items.some(item => item.id === `engine.${fieldId}`)) continue;
     add({
       id: `draft.${fieldId}`, severity: 'invalid', label: 'A value you typed is not valid yet',
       why: 'Results use its last valid value until it is fixed.',
-      blocks: keysForField(fieldId), target: { dashboard: dashboardForFieldId(plan, fieldId) ?? 'setup', fieldId }, actionLabel: 'Fix this value',
+      blocks: keysForField(fieldId), target: { dashboard: dashboardForFieldId(plan, fieldId) ?? 'school', fieldId }, actionLabel: 'Fix this value',
     });
   }
 
@@ -262,13 +260,13 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
   }
 
   // ---------------------------------------------------------------- Monthly loan budget
-  const budgetTarget: ReadinessTarget = { dashboard: 'repayment', fieldId: 'postGradIncome.monthlyDebtBudget' };
+  const budgetTarget: ReadinessTarget = { dashboard: 'results', fieldId: 'postGradIncome.monthlyDebtBudget' };
   const extra = plan.repayment.extraMonthlyPayment;
   if (positive(extra)) {
     add({
-      id: 'budget.legacyExtra', severity: 'warning', label: `Your saved plan adds an extra ${dollars(extra)}/mo to your budget`,
-      why: `It came from an older or imported plan and is added to your monthly loan budget (total used: ${dollars(baseBudget)}/mo).`,
-      blocks: PAYOFF_KEYS, target: budgetTarget, actionLabel: 'Review monthly budget',
+      id: 'budget.legacyExtra', severity: 'warning', label: `Your saved plan adds an extra ${dollars(extra)}/mo to your monthly payment`,
+      why: `It came from an older or imported plan and is added to your monthly payment (total used: ${dollars(baseBudget)}/mo).`,
+      blocks: PAYOFF_KEYS, target: budgetTarget, actionLabel: 'Review monthly payment',
     });
   }
   if (hasDebt) {
@@ -279,34 +277,34 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
       : !plan.lifeEvents.some(event => event.type === 'income' || event.type === 'windfall'));
     if (noBudget) {
       add({
-        id: 'budget.zero', severity: 'missing', label: 'Enter your monthly loan payment budget',
-        why: 'Your budget is $0.00, so nothing pays your loans. Needed for your debt-free date, total interest and payment schedule.',
-        blocks: PAYOFF_KEYS, target: budgetTarget, actionLabel: 'Enter monthly budget',
+        id: 'budget.zero', severity: 'missing', label: 'Enter your monthly payment',
+        why: 'Your monthly payment is $0.00, so nothing pays your loans. Needed for your debt-free date, total interest and payment schedule.',
+        blocks: PAYOFF_KEYS, target: budgetTarget, actionLabel: 'Enter monthly payment',
       });
     } else if (sameValue(plan.postGradIncome.monthlyDebtBudget, defaults.postGradIncome.monthlyDebtBudget)) {
       add({
         id: 'budget.default', severity: 'assumption',
-        label: `Confirm your monthly loan payment budget (using the default ${dollars(defaults.postGradIncome.monthlyDebtBudget)})`,
+        label: `Confirm monthly payment (${dollars(defaults.postGradIncome.monthlyDebtBudget)} default)`,
         why: 'Your payoff results assume this amount. Enter what you can actually pay toward all loans each month.',
-        blocks: BUDGET_ESTIMATE_KEYS, target: budgetTarget, actionLabel: 'Confirm monthly budget',
+        blocks: BUDGET_ESTIMATE_KEYS, target: budgetTarget, actionLabel: 'Confirm monthly payment',
       });
     }
     if (outputs && positive(outputs.paymentShortfall)) {
       add({
-        id: 'budget.shortfall', severity: 'warning', label: 'Your monthly budget is below your minimum payments',
-        why: `It is ${dollars(outputs.paymentShortfall!)} a month short of the minimums (${dollars(outputs.minimumTotal ?? '0')}). The projection assumes you pay only your budget; lenders may charge late fees.`,
-        blocks: ['minimumPayments', 'debtFreeDate'], target: budgetTarget, actionLabel: 'Increase monthly budget',
+        id: 'budget.shortfall', severity: 'warning', label: 'Your monthly payment is below the required minimums',
+        why: `It is ${dollars(outputs.paymentShortfall!)} a month short of the minimums (${dollars(outputs.minimumTotal ?? '0')}). The projection assumes you pay only this amount; lenders may charge late fees.`,
+        blocks: ['minimumPayments', 'debtFreeDate'], target: budgetTarget, actionLabel: 'Increase monthly payment',
       });
     }
     if (repayment && repayment.status !== 'paidOff' && !items.some(item => item.id === 'budget.zero')) {
       const below = repayment.status === 'notAmortizing';
       add({
         id: 'repayment.nonPayoff', severity: 'warning',
-        label: below ? 'Your monthly budget doesn\'t cover the interest' : 'No payoff found within the modeled limit of 100 years',
+        label: below ? 'Your monthly payment doesn\'t cover the interest' : 'No payoff found within the modeled limit of 100 years',
         why: below
-          ? 'At least one balance stops shrinking, so there is no debt-free date. Increase your monthly budget or change the loan terms.'
-          : 'A balance is still owed after 100 years of payments. This is not forgiveness: increase your monthly budget, or choose a payoff target to see the payment you would need.',
-        blocks: NON_PAYOFF_KEYS, target: budgetTarget, actionLabel: 'Increase monthly budget',
+          ? 'At least one balance stops shrinking, so there is no debt-free date. Increase your monthly payment or change the loan terms.'
+          : 'A balance is still owed after 100 years of payments. This is not forgiveness: increase your monthly payment, or set a payoff target to see the payment you would need.',
+        blocks: NON_PAYOFF_KEYS, target: budgetTarget, actionLabel: 'Increase monthly payment',
       });
     }
   }
@@ -316,7 +314,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
   const targetField = payoffTarget?.mode === 'target' ? (payoffTarget.kind === 'date' ? 'repayment.payoffTarget.date' : 'repayment.payoffTarget.months') : null;
   const target = context.target;
   if (hasDebt && targetField && target) {
-    const targetRef: ReadinessTarget = { dashboard: 'repayment', fieldId: targetField };
+    const targetRef: ReadinessTarget = { dashboard: 'results', fieldId: targetField };
     if (target.status === 'invalid' && target.reason !== 'missingInputs') {
       add({
         id: 'target.invalid', severity: 'invalid',
@@ -329,7 +327,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
       add({
         id: 'target.missingInputs', severity: 'missing', label: 'Your payoff target needs more information',
         why: target.message, blocks: ['targetPayment'],
-        target: { dashboard: dashboardForFieldId(plan, fieldId) ?? 'repayment', fieldId }, actionLabel: 'Enter missing value',
+        target: { dashboard: dashboardForFieldId(plan, fieldId) ?? 'results', fieldId }, actionLabel: 'Enter missing value',
       });
     } else if (target.status === 'infeasible') {
       add({
@@ -359,7 +357,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
       id: `missed.${missed.loanId}`, severity: 'warning',
       label: `"${loan?.name.trim() || 'A loan'}" has required payments before your first payment`,
       why: missed.message,
-      blocks: ['debtFreeDate', 'totalInterest'], target: { dashboard: 'repayment', fieldId: voluntaryField }, actionLabel: 'Change when payments start',
+      blocks: ['debtFreeDate', 'totalInterest'], target: { dashboard: 'results', fieldId: voluntaryField }, actionLabel: 'Change when payments start',
       secondaryAction: { target: { dashboard: 'loans', fieldId: `loans.${missed.loanId}.requiredPayment.firstDueDate` }, actionLabel: 'Check loan due date' },
     });
   }
@@ -381,7 +379,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
       blocks: ['borrowingGap'],
       target: firstZero
         ? { dashboard: 'school', fieldId: `schoolYears.${firstZero.year.id}.costItems.${firstZero.item.id}.amount` }
-        : firstYear ? { dashboard: 'school', fieldId: `schoolYears.${firstYear.id}.costItems-add` } : { dashboard: 'setup', fieldId: 'settings.graduationDate' },
+        : firstYear ? { dashboard: 'school', fieldId: `schoolYears.${firstYear.id}.costItems-add` } : { dashboard: 'school', fieldId: 'settings.graduationDate' },
       actionLabel: firstZero ? 'Enter cost amount' : 'Add school costs',
     });
   } else {
@@ -415,7 +413,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
         add({
           id: `earnings.${resource.id}.zero`, severity: 'warning', label: `${yearName(year.id)}: "${resource.label.trim() || 'Earnings'}" earns $0.00`,
           why: hourly ? 'Enter the hourly wage, hours and weeks, or remove these earnings.' : 'Enter the annual amount, or remove these earnings.',
-          blocks: ['schoolEarnings', 'borrowingGap'], target: { dashboard: 'income', fieldId: `${base}.${field}` },
+          blocks: ['schoolEarnings', 'borrowingGap'], target: { dashboard: 'school', fieldId: `${base}.${field}` },
           actionLabel: field === 'hourlyWage' ? 'Enter hourly wage' : 'Edit earnings',
         });
       } else {
@@ -430,7 +428,7 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
 
   // ---------------------------------------------------------------- Salary baseline (income events only)
   if (hasDebt && plan.lifeEvents.some(event => event.type === 'income')) {
-    const salaryTarget: ReadinessTarget = { dashboard: 'repayment', fieldId: 'postGradIncome.annualSalary' };
+    const salaryTarget: ReadinessTarget = { dashboard: 'results', fieldId: 'postGradIncome.annualSalary' };
     if (!positive(plan.postGradIncome.annualSalary)) {
       add({
         id: 'salary.baseline', severity: 'warning', label: 'Your starting salary is $0.00',
@@ -504,13 +502,13 @@ export function getPlanReadiness(plan: PlannerPlan, context: ReadinessContext = 
 function needsSummary(item: ReadinessItem): string {
   if (item.id === 'loans.none') return 'Needs a loan';
   if (item.id === 'loans.allZero') return 'Needs a loan amount';
-  if (item.id === 'budget.zero') return 'Needs a monthly budget';
+  if (item.id === 'budget.zero') return 'Needs a monthly payment';
   if (item.id === 'costs.none') return 'Needs school costs';
   return 'Needs more information';
 }
 
 function estimateSummary(item: ReadinessItem): string {
-  if (item.id === 'budget.default') return 'Estimate: uses the default monthly budget';
+  if (item.id === 'budget.default') return 'Estimate: uses the default monthly payment';
   if (item.id === 'salary.baseline') return 'Estimate: uses the default starting salary';
   if (item.id.endsWith('.requiredPaymentUnset')) return 'Estimate: a private loan\'s payment start is not set';
   return 'Estimate';

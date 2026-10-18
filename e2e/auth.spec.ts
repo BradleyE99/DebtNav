@@ -26,7 +26,7 @@ test('Sign in with Google goes through the issuer and back into the planner', as
   await page.getByLabel('Test user name').fill(user);
   await page.getByRole('button', { name: 'Continue' }).click();
   await page.waitForURL(url => url.origin === APP_ORIGIN && !url.pathname.startsWith('/api/'));
-  await expect(page.locator('.account-header__email')).toContainText(emailOf(user));
+  await expect(page.locator('.account-menu__email')).toContainText(emailOf(user));
   const understand = page.getByRole('button', { name: 'I understand' });
   if (await understand.isVisible()) await understand.click();
   await expect(page.locator('.dashboard')).toBeVisible();
@@ -72,15 +72,16 @@ test('an open-redirect returnTo is ignored; a same-site returnTo is honoured', a
 test('the session is restored on reload and in a new tab', async ({ page, context, user }) => {
   await openPlanner(page, user);
   await page.reload();
-  await expect(page.locator('.account-header__email')).toContainText(emailOf(user));
+  await expect(page.locator('.account-menu__email')).toContainText(emailOf(user));
   const tab = await context.newPage();
   await tab.goto('/');
-  await expect(tab.locator('.account-header__email')).toContainText(emailOf(user));
+  await expect(tab.locator('.account-menu__email')).toContainText(emailOf(user));
 });
 
 test('sign-out ends the session but keeps the saved plan for the next sign-in', async ({ page, user }) => {
   await openPlanner(page, user);
   await seedPlan(page, plan => { plan.postGradIncome.monthlyDebtBudget = '432.10'; });
+  await page.getByRole('button', { name: /^Account/ }).click();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(signInButton(page)).toBeVisible();
   await expect(page.locator('[data-notice="signedOut"]')).toBeVisible();
@@ -92,6 +93,7 @@ test('sign-out ends the session but keeps the saved plan for the next sign-in', 
 test('a second user never sees the first user\'s plan, even in the same browser after sign-out', async ({ page, browser, user }) => {
   await openPlanner(page, user);
   await seedPlan(page, plan => { plan.postGradIncome.monthlyDebtBudget = '777.77'; });
+  await page.getByRole('button', { name: /^Account/ }).click();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(signInButton(page)).toBeVisible();
   const other = uniqueUser(undefined, 'bob');

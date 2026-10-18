@@ -33,15 +33,24 @@ const FORBIDDEN_IDS = new Set(['__proto__', 'prototype', 'constructor']);
 const fileIssue = (message: string): ReadResult => ({ ok: false, errors: [{ sheet: '', row: null, column: null, message }], counts: {} });
 
 /** Raw cell content after unwrapping rich text/hyperlinks. `formula` marks formula cells. */
-type Raw = { kind: 'blank' } | { kind: 'string'; value: string } | { kind: 'number'; value: number } | { kind: 'boolean'; value: boolean }
+type Raw = { kind: 'blank' } | { kind: 'string'; value: string } | { kind: 'number'; value: number; percentFormat?: boolean } | { kind: 'boolean'; value: boolean }
   | { kind: 'date'; value: Date } | { kind: 'formula' } | { kind: 'error' };
+
+/**
+ * True for an Excel number format that displays the value ×100 with a % sign (e.g. '0.00%'). A % inside
+ * quotes or escaped with a backslash is literal text and does not scale the value.
+ */
+function isPercentFormat(format: string | undefined): boolean {
+  if (!format) return false;
+  return format.replace(/"[^"]*"/g, '').replace(/\\./g, '').includes('%');
+}
 
 function rawOf(cell: ExcelJS.Cell): Raw {
   const value = cell.value as unknown;
   if (cell.formula || (cell as { sharedFormula?: string }).sharedFormula || cell.type === ExcelJS.ValueType.Formula) return { kind: 'formula' };
   if (value === null || value === undefined) return { kind: 'blank' };
   if (typeof value === 'string') return value.trim() === '' ? { kind: 'blank' } : { kind: 'string', value };
-  if (typeof value === 'number') return Number.isFinite(value) ? { kind: 'number', value } : { kind: 'error' };
+  if (typeof value === 'number') return Number.isFinite(value) ? { kind: 'number', value, percentFormat: isPercentFormat(cell.numFmt) } : { kind: 'error' };
   if (typeof value === 'boolean') return { kind: 'boolean', value };
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? { kind: 'error' } : { kind: 'date', value };
   if (typeof value === 'object') {
@@ -69,8 +78,10 @@ const bad = <T>(message: string): Parsed<T> => ({ ok: false, message });
 
 function decimalText(raw: Raw, places: number, symbol: '$' | '%' | null): Parsed<Decimal> {
   let text: string;
-  if (raw.kind === 'number') text = String(raw.value);
-  else if (raw.kind === 'string') {
+  if (raw.kind === 'number') {
+    // A percent-formatted cell holds the fraction (6.53% is stored as 0.0653): use the value as displayed.
+    text = symbol === '%' && raw.percentFormat ? new Decimal(String(raw.value)).times(100).toFixed() : String(raw.value);
+  } else if (raw.kind === 'string') {
     text = unescapeText(raw.value).trim();
     if (symbol === '$' && text.startsWith('$')) text = text.slice(1).trim();
     if (symbol === '%' && text.endsWith('%')) text = text.slice(0, -1).trim();

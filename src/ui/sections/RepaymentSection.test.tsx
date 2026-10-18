@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** Repayment Plan dashboard: US-501 earnings & budget, US-506 payoff target, US-507 payment start and timing. */
+/** Repayment inputs in Results: US-501 earnings & monthly payment, US-506 payoff target, US-507 payment start and timing. */
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -28,40 +28,39 @@ function zeroRatePlan(edit: (p: PlannerPlan) => void = () => {}): PlannerPlan {
 }
 
 describe('earnings and budget (US-501)', () => {
-  it('is the only editor of post-graduation earnings, with gross salary, take-home, expenses and the chosen budget kept distinct', () => {
+  it('is the only editor of post-graduation earnings, with gross salary, take-home, expenses and the chosen payment kept distinct', () => {
     renderPlanner({ plan: samplePlan() });
     navigateTo('repayment');
-    expect(screen.getByRole('heading', { level: 2, name: 'Repayment Plan' })).toBeTruthy();
-    for (const label of ['Gross annual salary (before taxes)', 'Monthly take-home pay (optional)', 'Monthly living expenses (optional)', 'Monthly debt budget (your chosen payment)']) {
+    expect(screen.getByRole('heading', { level: 2, name: 'Results' })).toBeTruthy();
+    for (const label of ['Salary (before tax)', 'Monthly take-home pay', 'Monthly living expenses', 'Monthly payment']) {
       expect(screen.getByLabelText(label)).toBeTruthy();
     }
-    expect(screen.getByText(/does not estimate taxes and never assumes your whole salary is available/)).toBeTruthy();
     expect(screen.queryByLabelText(/projection horizon/i)).toBeNull();
-    // Income & Earnings has no post-graduation inputs any more (one source of truth).
+    // College Costs (in-school work) has no post-graduation inputs (one source of truth).
     navigateTo('income');
-    expect(screen.queryByLabelText(/salary|debt budget|take-home/i)).toBeNull();
+    expect(screen.queryByLabelText(/salary|monthly payment|take-home/i)).toBeNull();
   });
 
   it('shows affordability context only once take-home pay is entered; blank stays "not set" and 0 is a value', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
     navigateTo('repayment');
-    expect(screen.queryByRole('heading', { name: 'Affordability check' })).toBeNull();
+    const check = () => document.querySelector<HTMLElement>('.affordability');
+    expect(check()).toBeNull();
     expect(view.plan().postGradIncome.monthlyTakeHome).toBeUndefined();
 
     await user.type(byId('postGradIncome.monthlyTakeHome'), '3000');
     expect(view.plan().postGradIncome.monthlyTakeHome).toBe('3000.00');
-    const check = () => screen.getByRole('heading', { name: 'Affordability check' }).parentElement as HTMLElement;
-    expect(check().textContent).toContain('Left before living expenses$2,400.00');
-    expect(check().textContent).toContain('20.0% of your take-home pay');
+    expect(check()!.textContent).toContain('Your monthly payment is 20.0% of take-home.');
+    expect(check()!.textContent).toContain('Leaves $2,400.00/mo before living expenses.');
 
     await user.type(byId('postGradIncome.monthlyExpenses'), '2000');
-    expect(check().textContent).toContain('Left each month$400.00');
+    expect(check()!.textContent).toContain('Leaves $400.00/mo after expenses.');
 
     await user.clear(byId('postGradIncome.monthlyExpenses'));
     await user.type(byId('postGradIncome.monthlyExpenses'), '2700');
-    expect(check().textContent).toContain('Left each month−$300.00');
-    expect(within(check()).getByText(/more than what is left after your expenses/)).toBeTruthy();
+    expect(check()!.textContent).toContain('Leaves −$300.00/mo after expenses.');
+    expect(check()!.textContent).toMatch(/More than what is left after expenses/);
 
     // A valid zero is stored as a value; clearing the field removes it again.
     await user.clear(byId('postGradIncome.monthlyExpenses'));
@@ -79,8 +78,8 @@ describe('payoff mode (US-506)', () => {
     const view = renderPlanner({ plan: samplePlan() });
     navigateTo('repayment');
     expect(view.plan().repayment.payoffTarget).toEqual({ mode: 'budget' });
-    expect(screen.getByRole('group', { name: 'Planning mode' })).toBeTruthy();
-    await user.click(screen.getByLabelText('Choose a payoff target → see the required monthly payment'));
+    expect(screen.getByRole('group', { name: 'Payoff target' })).toBeTruthy();
+    await user.click(screen.getByLabelText('Show the payment needed to be debt-free by a target'));
     expect(view.plan().repayment.payoffTarget).toEqual({ mode: 'target', kind: 'duration', months: 120 });
     const years = byId('repayment.payoffTarget.months');
     const months = byId('repayment.payoffTarget.months-part');
@@ -121,9 +120,9 @@ describe('payoff mode (US-506)', () => {
     expect(byId('repayment.payoffTarget.date').value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
     // Back to budget mode, then target mode again restores the last target.
-    await user.click(screen.getByLabelText('Choose a monthly budget → see payoff'));
+    await user.click(screen.getByLabelText('No target: use my monthly payment'));
     expect(view.plan().repayment.payoffTarget).toEqual({ mode: 'budget' });
-    await user.click(screen.getByLabelText('Choose a payoff target → see the required monthly payment'));
+    await user.click(screen.getByLabelText('Show the payment needed to be debt-free by a target'));
     expect(view.plan().repayment.payoffTarget).toEqual(target);
   });
 
@@ -138,14 +137,14 @@ describe('payoff mode (US-506)', () => {
     });
     // US-506 acceptance: $12,000 at 0% over 12 payments → $1,000.00 per month.
     expect(result.textContent).toContain('Required monthly payment$1,000.00');
-    expect(result.textContent).toContain('Your chosen budget$600.00');
-    expect(result.textContent).toContain('$400.00 more than your budget');
+    expect(result.textContent).toContain('Your monthly payment$600.00');
+    expect(result.textContent).toContain('$400.00 more than your monthly payment');
     expect(view.plan().postGradIncome.monthlyDebtBudget).toBe('600.00');
 
-    await user.click(within(result).getByRole('button', { name: 'Use $1,000.00 as my monthly budget' }));
+    await user.click(within(result).getByRole('button', { name: 'Use $1,000.00 as my monthly payment' }));
     expect(view.plan().postGradIncome.monthlyDebtBudget).toBe('1000.00');
-    await waitFor(() => expect(document.querySelector('.target-result')?.textContent).toContain('Same as your budget'));
-    expect(screen.queryByRole('button', { name: /as my monthly budget/ })).toBeNull();
+    await waitFor(() => expect(document.querySelector('.target-result')?.textContent).toContain('Same as your monthly payment'));
+    expect(screen.queryByRole('button', { name: /as my monthly payment/ })).toBeNull();
   });
 
   it('explains a target that is in the past without touching the budget', async () => {
@@ -171,7 +170,7 @@ describe('payment timing (US-507)', () => {
     await user.type(byId('repayment.voluntaryStart.months'), '3');
     expect(view.plan().repayment.voluntaryStart).toEqual({ kind: 'afterGraduation', months: 3 });
     expect(screen.getByTestId('first-voluntary-payment').textContent).toBe('Sep 20, 2030');
-    await user.click(screen.getByLabelText('From a specific date'));
+    await user.click(screen.getByLabelText('From a date'));
     expect(view.plan().repayment.voluntaryStart).toEqual({ kind: 'date', date: '2030-08-20' });
     expect(byId('repayment.voluntaryStart.date').value).toBe('2030-08-20');
   });

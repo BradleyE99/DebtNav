@@ -19,7 +19,7 @@ function jsonFile(text: string): File {
   return file;
 }
 const keyGap = () => (screen.queryByTestId('key-gap') ?? document.querySelector('.gap-main dd'))?.textContent;
-const keyInterest = () => screen.getByTestId('key-interest').textContent;
+const keyInterest = () => screen.getByTestId('headline-interest').textContent;
 
 function firstYearId(plan = samplePlan()) { return plan.schoolYears[0].id; }
 
@@ -58,15 +58,15 @@ describe('editable fields', () => {
   it("accepts '55,000' and '$400', and rejects 'abc' without committing", async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
-    // US-501: post-graduation salary and budget are edited in Repayment Plan (were in Income & Earnings).
+    // US-501: post-graduation salary and the monthly payment are edited in Results.
     navigateTo('repayment', true);
-    const salary = screen.getByLabelText('Gross annual salary (before taxes)') as HTMLInputElement;
+    const salary = screen.getByLabelText('Salary (before tax)') as HTMLInputElement;
     await user.tripleClick(salary);
     await user.keyboard('55,000');
     expect(salary.getAttribute('aria-invalid')).toBeNull();
     expect(view.plan().postGradIncome.annualSalary).toBe('55000.00');
 
-    const budget = screen.getByLabelText('Monthly debt budget (your chosen payment)') as HTMLInputElement;
+    const budget = screen.getByLabelText('Monthly payment') as HTMLInputElement;
     await user.clear(budget);
     await user.type(budget, '$400');
     expect(view.plan().postGradIncome.monthlyDebtBudget).toBe('400.00');
@@ -188,12 +188,11 @@ describe('records', () => {
     await user.selectOptions(byId(`schoolYears.${view.plan().schoolYears[0].id}.costItems.${item.id}.semester`), 'fall');
     expect(screen.getByText('Fall subtotal')).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: 'Add resource to Year 1' }));
+    await user.click(screen.getByRole('button', { name: 'Add grant or savings to Year 1' }));
     const resource = view.plan().schoolYears[0].resources[1];
     const base = `schoolYears.${view.plan().schoolYears[0].id}.resources.${resource.id}`;
     await user.selectOptions(byId(`${base}.type`), 'savings');
-    navigateTo('income');
-    await user.click(screen.getByRole('button', { name: 'Add earnings' }));
+    await user.click(screen.getByRole('button', { name: 'Add work' }));
     const job = view.plan().schoolYears[0].resources[2];
     const jobBase = `schoolYears.${view.plan().schoolYears[0].id}.resources.${job.id}`;
     await user.clear(byId(`${jobBase}.hourlyWage`));
@@ -232,7 +231,7 @@ describe('records', () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: { ...samplePlan(), loans: [], repayment: { ...samplePlan().repayment, customOrder: [] } } });
     navigateTo('school', true);
-    await user.click(screen.getByRole('button', { name: 'Create loan from gap for Year 1' }));
+    await user.click(screen.getByRole('button', { name: /^Create loan .*for Year 1$/ }));
     const [loan] = view.plan().loans;
     expect(loan.principal).toBe('6000.00');
     expect(document.activeElement?.id).toBe(`loans.${loan.id}.name`);
@@ -243,61 +242,62 @@ describe('records', () => {
     expect(view.plan().loans[0].principal).toBe('6000.00');
     navigateTo('loans');
     await user.click(screen.getByRole('button', { name: 'Expand all' }));
-    expect(screen.getByText(/The loan was not changed/)).toBeTruthy();
+    expect(screen.getByText(/was not changed/)).toBeTruthy();
   });
 
-  it('adds, edits, and removes a life event with an impact sentence', async () => {
+  it('adds, edits, and removes a bonus in Results, with the portion to debt and an impact sentence', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
-    navigateTo('events', true);
-    await user.click(screen.getByRole('button', { name: 'Add life event' }));
+    navigateTo('results', true);
+    await user.click(screen.getByRole('button', { name: 'Add bonus or extra payment' }));
     const event = view.plan().lifeEvents[0];
+    expect(event).toMatchObject({ type: 'windfall', name: 'Bonus' });
     const amount = byId(`lifeEvents.${event.id}.amount`);
     await user.clear(amount);
     await user.type(amount, '3000');
     expect(view.plan().lifeEvents[0].amount).toBe('3000.00');
+    const share = byId(`lifeEvents.${event.id}.allocationPercent`);
+    await user.clear(share);
+    await user.type(share, '50');
+    expect(screen.getByText(/To debt:/).closest('p')?.textContent).toBe('To debt: $1,500.00 · Kept: $1,500.00');
     expect(await screen.findByText(/This event moves your debt-free date earlier by \d+ months? and saves \$[\d,]+\.\d\d interest\./)).toBeTruthy();
     await user.selectOptions(byId(`lifeEvents.${event.id}.recurrence`), 'yearly');
     expect(view.plan().lifeEvents[0].recurrence).toBe('yearly');
-    await user.click(screen.getByRole('button', { name: /Remove event New event/ }));
+    await user.click(screen.getByRole('button', { name: /Remove event Bonus/ }));
     expect(view.plan().lifeEvents).toHaveLength(0);
   });
 
-  it('adds a scenario, stores only changed overrides, resets to base, and removes it', async () => {
+  it('adds one-time aid to a school year in College Costs; it counts toward that year only', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
+    navigateTo('school', true);
+    expect(document.querySelector('.gap-main dd')?.textContent).toBe('$6,000.00');
+    await user.click(screen.getByRole('button', { name: 'Add aid' }));
+    const event = view.plan().lifeEvents[0];
+    expect(event).toMatchObject({ type: 'aid', schoolYearId: view.plan().schoolYears[0].id });
+    const amount = byId(`lifeEvents.${event.id}.amount`);
+    await user.clear(amount);
+    await user.type(amount, '1000');
+    expect(document.querySelector('.gap-main dd')?.textContent).toBe('$5,000.00');
+    // It is not listed with the Results bonuses and income changes.
+    navigateTo('results', true);
+    expect(document.getElementById(`lifeEvents.${event.id}.amount`)).toBeNull();
+  });
+
+  it('keeps stored scenarios unchanged while the plan is edited (no Scenarios screen)', async () => {
+    const user = userEvent.setup();
+    const scenarios = [{ id: 'sc-1', name: 'Conservative', overrides: { 'postGradIncome.annualSalary': '45000.00' } }];
+    const view = renderPlanner({ plan: { ...samplePlan(), scenarios } });
+    expect(screen.queryByRole('link', { name: /Scenarios/ })).toBeNull();
     navigateTo('scenarios', true);
-    await user.click(screen.getByRole('button', { name: 'Add scenario' }));
-    const scenario = view.plan().scenarios[0];
-    const salaryId = `scenarios.${scenario.id}.overrides.postGradIncome.monthlyDebtBudget`;
-    const budget = byId(salaryId);
-    expect(budget.value).toBe('600.00');
+    expect(document.querySelector('.dashboard')?.getAttribute('data-dashboard')).toBe('results');
+    const budget = screen.getByLabelText('Monthly payment');
     await user.clear(budget);
-    await user.type(budget, '600');
-    expect(view.plan().scenarios[0].overrides).toEqual({});
-    await user.clear(budget);
-    await user.type(budget, '900');
-    expect(view.plan().scenarios[0].overrides).toEqual({ 'postGradIncome.monthlyDebtBudget': '900.00' });
-    navigateTo('results');
-    await user.selectOptions(screen.getByLabelText('Explore results'), 'scenarios');
-    expect(await screen.findByText(/^Debt-free (between|in) /)).toBeTruthy();
-    navigateTo('scenarios');
-
-    // Any-field picker.
-    await user.selectOptions(byId(`scenarios.${scenario.id}.picker`), 'loans.loan-a.annualRate');
-    await user.click(screen.getByRole('button', { name: `Add field to ${scenario.name}` }));
-    const rate = byId(`scenarios.${scenario.id}.overrides.loans.loan-a.annualRate`);
-    await user.clear(rate);
-    await user.type(rate, '7');
-    expect(view.plan().scenarios[0].overrides['loans.loan-a.annualRate']).toBe('0.07');
-
-    await user.click(screen.getByRole('button', { name: 'Reset to base for Monthly debt budget' }));
-    expect(view.plan().scenarios[0].overrides['postGradIncome.monthlyDebtBudget']).toBeUndefined();
-    expect(byId(salaryId).value).toBe('600.00');
-    await user.click(screen.getByRole('button', { name: 'Reset all to base' }));
-    expect(view.plan().scenarios[0].overrides).toEqual({});
-    await user.click(screen.getByRole('button', { name: `Remove scenario ${scenario.name}` }));
-    expect(view.plan().scenarios).toHaveLength(0);
+    await user.type(budget, '650');
+    expect(view.plan().postGradIncome.monthlyDebtBudget).toBe('650.00');
+    expect(view.plan().scenarios).toEqual(scenarios);
+    const exported = view.store().exportJson();
+    expect(exported.ok && JSON.parse(exported.value).document.plan.scenarios).toEqual(scenarios);
   });
 });
 
@@ -305,16 +305,11 @@ describe('repayment', () => {
   it('changing the strategy updates results', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
-    navigateTo('repayment', true);
-    navigateTo('overview');
+    navigateTo('results', true);
     const avalancheInterest = keyInterest();
-    navigateTo('repayment');
     await user.selectOptions(screen.getByLabelText('Payoff strategy'), 'snowball');
     expect(view.plan().repayment.strategyId).toBe('snowball');
-    navigateTo('overview');
     expect(keyInterest()).not.toBe(avalancheInterest);
-    navigateTo('results');
-    await user.selectOptions(screen.getByLabelText('Explore results'), 'strategies');
     const table = await screen.findByRole('table', { name: /Same plan, different payoff orders/ });
     expect(within(table).getByText('Your choice').closest('tr')?.textContent).toMatch(/Snowball/);
     expect(table.textContent).not.toMatch(/\bbest\b/i);
@@ -324,7 +319,7 @@ describe('repayment', () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: samplePlan() });
     navigateTo('repayment', true);
-    document.querySelector<HTMLDetailsElement>('.order-details')?.setAttribute('open', '');
+    await user.selectOptions(screen.getByLabelText('Payoff strategy'), 'custom');
     const down = screen.getByRole('button', { name: 'Move down Alpha loan' });
     await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
     down.focus();
@@ -339,25 +334,23 @@ describe('repayment', () => {
     const user = userEvent.setup();
     renderPlanner({ plan: samplePlan() });
     navigateTo('repayment', true);
-    const budget = screen.getByLabelText('Monthly debt budget (your chosen payment)');
+    const budget = screen.getByLabelText('Monthly payment');
     await user.clear(budget);
     await user.type(budget, '50');
-    expect(screen.getByText(/short of the minimum payments/)).toBeTruthy();
-    navigateTo('results');
-    expect(screen.getByText(/payments don't cover the interest/)).toBeTruthy();
-    navigateTo('overview');
-    expect(screen.getByTestId('key-debt-free').textContent).toBe('No debt-free date');
+    expect(screen.getByText(/short of the required minimums/)).toBeTruthy();
+    expect(screen.getAllByText(/payment doesn't cover the interest/)).toHaveLength(1);
+    expect(screen.getByTestId('headline-debt-free').textContent).toBe('No debt-free date');
+    expect(screen.getByTestId('headline-time').textContent).toBe('Not paid off');
   });
 
   it('pages through the amortization schedule', async () => {
     const user = userEvent.setup();
     renderPlanner({ plan: samplePlan() });
     navigateTo('results', true);
-    await user.selectOptions(screen.getByLabelText('Explore results'), 'schedule');
     expect(screen.getByRole('table', { name: /All loans combined: months 1–12 of/ })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Next 12 months' }));
     expect(screen.getByRole('table', { name: /months 13–24 of/ })).toBeTruthy();
-    await user.selectOptions(screen.getByLabelText('Show'), 'loan-b');
+    await user.selectOptions(screen.getByLabelText('Loans shown'), 'loan-b');
     expect(screen.getByRole('table', { name: /Beta loan: months 1–/ })).toBeTruthy();
   });
 });
@@ -406,14 +399,14 @@ describe('data and disclaimer', () => {
     navigateTo('repayment', true);
     const exported = view.store().exportJson();
     if (!exported.ok) throw new Error('export failed');
-    const budget = screen.getByLabelText('Monthly debt budget (your chosen payment)');
+    const budget = screen.getByLabelText('Monthly payment');
     await user.clear(budget);
     await user.type(budget, '700');
     navigateTo('data');
     await user.upload(screen.getByLabelText('Import plan (JSON)'), jsonFile(exported.value));
     expect(await screen.findByText(/Plan imported/)).toBeTruthy();
-    navigateTo('repayment');
-    expect((screen.getByLabelText('Monthly debt budget (your chosen payment)') as HTMLInputElement).value).toBe('600.00');
+    await user.keyboard('{Escape}');
+    expect((screen.getByLabelText('Monthly payment') as HTMLInputElement).value).toBe('600.00');
     navigateTo('data');
     await user.upload(screen.getByLabelText('Import plan (JSON)'), jsonFile('{bad'));
     expect(await screen.findByText(/Import failed; your current plan is unchanged/)).toBeTruthy();

@@ -1,5 +1,5 @@
 import type { Page, Locator } from '@playwright/test';
-import { test, expect, openPlanner } from './support/fixtures';
+import { test, expect, goTo, openPlanner } from './support/fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 // Loan academic years and "Group by academic year", exercised with real mouse and keyboard input in Chromium.
@@ -13,12 +13,7 @@ const yearCards = (page: Page, key: string) => year(page, key).locator('article.
 const field = (target: Locator, suffix: string) => target.locator(`[id$=".${suffix}"]`);
 const focusedId = (page: Page) => page.evaluate(() => document.activeElement?.id ?? '');
 
-async function navigate(page: Page, id: string) {
-  const menu = page.getByRole('button', { name: 'Menu', exact: true });
-  if (await menu.isVisible()) await menu.click();
-  await page.locator(`nav a[href="#${id}"]`).click();
-  await expect(page.locator('.dashboard')).toHaveAttribute('data-dashboard', id);
-}
+const navigate = goTo;
 
 async function retype(page: Page, input: Locator, text: string) {
   await input.click();
@@ -28,9 +23,9 @@ async function retype(page: Page, input: Locator, text: string) {
 }
 
 async function readResults(page: Page) {
-  await navigate(page, 'overview');
-  const interest = await page.getByTestId('key-interest').innerText();
-  const debtFree = await page.getByTestId('key-debt-free').innerText();
+  await navigate(page, 'results');
+  const interest = await page.getByTestId('headline-interest').innerText();
+  const debtFree = await page.getByTestId('headline-debt-free').innerText();
   await navigate(page, 'loans');
   return { interest, debtFree };
 }

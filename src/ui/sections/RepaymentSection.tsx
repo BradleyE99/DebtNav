@@ -1,18 +1,20 @@
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useRef, useState, type DragEvent, type ReactNode } from 'react';
 import type { PayoffTarget, PlannerPlan, VoluntaryStart } from '../../engine/planner-contracts';
 import { D, money } from '../../engine/money';
 import { addMonths } from '../../engine/dates';
 import { baseMonthlyBudget } from '../../engine/planner';
 import { usePlanner } from '../PlannerContext';
 import { DateField, IntegerField, MoneyField, OptionalMoneyField, PercentField, SelectField } from '../fields/fields';
-import { Explain } from '../common/common';
 import { formatCurrency, formatDate, formatMonthYear, isPositive, plural, strategyName, strategyOptions } from '../format';
 import { effectiveCustomOrder, moveInCustomOrder } from '../planUpdates';
-import { onRevealRequest } from '../reveal';
-import { navigateDashboard } from '../nav/navigation';
-import { ResultFigure } from '../results/Readiness';
 import { PaymentTiming } from '../results/PaymentTiming';
 import './repayment.css';
+
+/*
+ * Repayment inputs shown inside Results (US-501/506/507): earnings and the chosen monthly payment,
+ * payoff order, when payments start, the optional payoff target and the default share of raises.
+ * These are the only editors of these values.
+ */
 
 const STRATEGY_OPTIONS = strategyOptions();
 const DEFAULT_TARGET_MONTHS = 120;
@@ -25,106 +27,76 @@ const withStart = (voluntaryStart: VoluntaryStart) => (p: PlannerPlan): PlannerP
 /** "$120.00 more than your budget" / "$40.00 less than your budget" / "Same as your budget". */
 export function differenceSentence(difference: string): string {
   const value = new D(difference);
-  if (value.isZero()) return 'Same as your budget';
-  return `${formatCurrency(value.abs().toFixed(2))} ${value.isNegative() ? 'less' : 'more'} than your budget`;
+  if (value.isZero()) return 'Same as your monthly payment';
+  return `${formatCurrency(value.abs().toFixed(2))} ${value.isNegative() ? 'less' : 'more'} than your monthly payment`;
 }
 
-/**
- * US-501/506/507: the only editor of post-graduation earnings and the chosen monthly debt budget;
- * budget vs. payoff-target mode; when voluntary payments start; strategy, minimums and custom order.
- */
-export function RepaymentSection() {
-  const { plan, update, projection, readiness } = usePlanner();
-  const minimumsReady = readiness.results.minimumPayments.state === 'complete' || readiness.results.minimumPayments.state === 'estimate';
-  const [raisesOpen, setRaisesOpen] = useState(false);
-  useEffect(() => onRevealRequest(id => { if (id === 'postGradIncome.raiseAllocationPercent') setRaisesOpen(true); }), []);
+/** The regular monthly amount used for loans: monthlyDebtBudget (+ a legacy extra monthly payment). */
+export function totalMonthlyPayment(plan: PlannerPlan): string {
+  try { return money(baseMonthlyBudget(plan)); } catch { return plan.postGradIncome.monthlyDebtBudget; }
+}
+
+/** Earnings & payment: salary, take-home, expenses, the chosen monthly payment, affordability and payoff order. */
+export function EarningsAndPayment() {
+  const { plan, update, readiness } = usePlanner();
   const income = plan.postGradIncome;
   const budgetIsDefault = readiness.items.some(item => item.id === 'budget.default');
   const extraBudget = isPositive(plan.repayment.extraMonthlyPayment) ? plan.repayment.extraMonthlyPayment : null;
-  let totalBudget = income.monthlyDebtBudget;
-  try { totalBudget = money(baseMonthlyBudget(plan)); } catch { /* invalid text is reported elsewhere */ }
-
+  const totalBudget = totalMonthlyPayment(plan);
   return (
-    <section id="repayment" className="panel" aria-labelledby="repayment-heading">
-      <h2 id="repayment-heading">Repayment Plan</h2>
-      <p className="section-intro">Your earnings after graduation, what you choose to pay toward loans each month, and how that money pays down your loans. Earnings while you are in school are under <a href="#income" onClick={event => { event.preventDefault(); navigateDashboard('income'); }}>How much I make</a>.</p>
-
-      <section className="repayment-block" aria-labelledby="repayment-earnings-heading">
-        <h3 id="repayment-earnings-heading">After graduation: earnings and monthly budget</h3>
-        <p className="field-hint">Three different amounts: your gross salary is not your take-home pay, and neither is the amount that goes to loans. DebtNav does not estimate taxes and never assumes your whole salary is available.</p>
-        <div className="field-grid">
-          <MoneyField id="postGradIncome.annualSalary" label="Gross annual salary (before taxes)" value={income.annualSalary}
-            hint="Pay before taxes and deductions. Not used to pay loans: it is only the starting point for income changes and raises in Life events."
-            onCommit={annualSalary => update(withIncome({ annualSalary }), 'Change gross annual salary')} />
-          <OptionalMoneyField id="postGradIncome.monthlyTakeHome" label="Monthly take-home pay (optional)" value={income.monthlyTakeHome}
-            hint="What reaches your bank account each month after taxes and deductions. Enter your own figure. Used only for affordability context; leave blank to skip."
-            onCommit={monthlyTakeHome => update(withIncome({ monthlyTakeHome }), 'Change monthly take-home pay')} />
-          <OptionalMoneyField id="postGradIncome.monthlyExpenses" label="Monthly living expenses (optional)" value={income.monthlyExpenses}
-            hint="Rent, food, transport and other costs, not counting student loans. Used only for affordability context; leave blank to skip."
-            onCommit={monthlyExpenses => update(withIncome({ monthlyExpenses }), 'Change monthly living expenses')} />
-          <MoneyField id="postGradIncome.monthlyDebtBudget" label="Monthly debt budget (your chosen payment)" value={income.monthlyDebtBudget}
-            hint={<>The total you choose to pay toward all loans each month. Your debt-free date and total interest use it, and DebtNav never changes it for you.{budgetIsDefault && <> <strong>Default value</strong>: replace it with your own amount.</>}{extraBudget && <> Your saved plan also adds {formatCurrency(extraBudget)}/mo, so the total used is {formatCurrency(totalBudget)}/mo.</>}</>}
-            onCommit={monthlyDebtBudget => update(withIncome({ monthlyDebtBudget }), 'Change monthly debt budget')} />
-        </div>
-        <details className="explain repayment-raises" open={raisesOpen} onToggle={event => setRaisesOpen(event.currentTarget.open)}>
-          <summary>Default share of future raises for debt</summary>
-          <PercentField id="postGradIncome.raiseAllocationPercent" label="Default share of raises put toward debt" max="100" value={income.raiseAllocationPercent}
-            hint="Starting share for new income-change events in Life events. Each event keeps its own share; existing events do not change."
-            onCommit={raiseAllocationPercent => update(withIncome({ raiseAllocationPercent }), 'Change default share of raises')} />
-        </details>
-        <Affordability payment={totalBudget} label="Your monthly debt budget" />
-      </section>
-
-      <PayoffMode />
-
-      <section className="repayment-block" aria-labelledby="repayment-start-heading">
-        <h3 id="repayment-start-heading">When you start paying</h3>
-        <VoluntaryStartFields />
-        <PaymentTiming headingLevel={4} />
-      </section>
-
-      <section className="repayment-block" aria-labelledby="repayment-strategy-heading">
-        <h3 id="repayment-strategy-heading">Payoff strategy and minimum payments</h3>
+    <>
+      <div className="field-grid">
+        <MoneyField id="postGradIncome.monthlyDebtBudget" label="Monthly payment" value={income.monthlyDebtBudget}
+          hint={<>Total for all loans.{budgetIsDefault && <> <strong>Default value</strong>: confirm or change it.</>}{extraBudget && <> Plus a saved extra {formatCurrency(extraBudget)}/mo = {formatCurrency(totalBudget)}/mo.</>}</>}
+          onCommit={monthlyDebtBudget => update(withIncome({ monthlyDebtBudget }), 'Change monthly payment')} />
+        <MoneyField id="postGradIncome.annualSalary" label="Salary (before tax)" value={income.annualSalary}
+          hint="Starting point for income changes."
+          onCommit={annualSalary => update(withIncome({ annualSalary }), 'Change salary')} />
+        <OptionalMoneyField id="postGradIncome.monthlyTakeHome" label="Monthly take-home pay" value={income.monthlyTakeHome}
+          hint="Optional."
+          onCommit={monthlyTakeHome => update(withIncome({ monthlyTakeHome }), 'Change monthly take-home pay')} />
+        <OptionalMoneyField id="postGradIncome.monthlyExpenses" label="Monthly living expenses" value={income.monthlyExpenses}
+          hint="Optional. Not counting loans."
+          onCommit={monthlyExpenses => update(withIncome({ monthlyExpenses }), 'Change monthly living expenses')} />
+      </div>
+      <Affordability payment={totalBudget} label="Your monthly payment" />
+      <MinimumsCheck />
+      <details className="explain payoff-order">
+        <summary>Payoff order <span className="subtle">{strategyName(plan.repayment.strategyId)}</span></summary>
         <div className="field-grid">
           <SelectField id="repayment.strategyId" label="Payoff strategy" options={STRATEGY_OPTIONS} value={plan.repayment.strategyId}
             hint="Where money beyond the minimums goes first."
             onCommit={strategyId => update(p => ({ ...p, repayment: { ...p.repayment, strategyId } }), 'Change payoff strategy')} />
         </div>
-        {!minimumsReady && <p className="empty">Minimum payments appear once you add a loan with an amount borrowed.</p>}
-        {projection && projection.minimumTotal !== null && minimumsReady && (
-          <div className="computed-block">
-            <p className="computed">Sum of minimum payments: <strong>{formatCurrency(projection.minimumTotal)}</strong> per month</p>
-            {isPositive(projection.paymentShortfall) && (
-              <div className="notice notice--warning" role="status">
-                <span className="notice-icon" aria-hidden="true">!</span>
-                <p>Your monthly debt budget is <strong>{formatCurrency(projection.paymentShortfall)}</strong> short of the minimum payments ({formatCurrency(projection.minimumTotal)}). The projection shows what happens if you pay only your budget.</p>
-              </div>
-            )}
-            <Explain>
-              <p>Each month, every loan's minimum payment is paid first. Money left in your monthly budget goes to the loan your strategy picks: avalanche = highest rate first (ties: smallest balance), snowball = smallest balance first (ties: highest rate), custom = your order below. When a loan is paid off, its minimum rolls into the next target.</p>
-              <p>Shortfall = max(0, sum of minimums − monthly budget). Monthly interest = balance × annual rate ÷ 12, rounded half-up to cents.</p>
-            </Explain>
-          </div>
-        )}
-        <details open={plan.repayment.strategyId === 'custom'} className="explain">
-          <summary>Set a custom payoff order</summary>
-          <CustomOrder />
-        </details>
-      </section>
-    </section>
+        {plan.repayment.strategyId === 'custom' && <CustomOrder />}
+      </details>
+    </>
+  );
+}
+
+/** Sum of minimums and a shortfall warning (one message). */
+function MinimumsCheck() {
+  const { projection, readiness } = usePlanner();
+  const ready = readiness.results.minimumPayments.state === 'complete' || readiness.results.minimumPayments.state === 'estimate';
+  if (!projection || projection.minimumTotal === null || !ready) return null;
+  return isPositive(projection.paymentShortfall) ? (
+    <div className="notice notice--warning" role="status">
+      <span className="notice-icon" aria-hidden="true">!</span>
+      <p>Your monthly payment is <strong>{formatCurrency(projection.paymentShortfall)}</strong> short of the required minimums ({formatCurrency(projection.minimumTotal)}/mo).</p>
+    </div>
+  ) : (
+    <p className="field-hint">Required minimums: {formatCurrency(projection.minimumTotal)}/mo.</p>
   );
 }
 
 /**
- * Affordability context, shown only when the user entered take-home pay (US-501). Never a
- * recommendation and never changes the budget.
+ * Affordability context, only when take-home pay is entered (US-501): one line with the share of
+ * take-home and what is left. Never a recommendation and never changes the payment.
  */
 function Affordability({ payment, label }: { payment: string; label: string }) {
   const { plan } = usePlanner();
   const { monthlyTakeHome, monthlyExpenses } = plan.postGradIncome;
-  if (monthlyTakeHome === undefined) {
-    return <p className="field-hint">Add your monthly take-home pay (and expenses) to compare payments with what you bring home.</p>;
-  }
+  if (monthlyTakeHome === undefined) return null;
   let left: string | null = null;
   let share: string | null = null;
   try {
@@ -133,34 +105,49 @@ function Affordability({ payment, label }: { payment: string; label: string }) {
     share = takeHome.gt(0) ? new D(payment).div(takeHome).times(100).toDecimalPlaces(1).toFixed(1) : null;
   } catch { return null; }
   const negative = new D(left).isNegative();
+  const leftText = negative ? `−${formatCurrency(new D(left).abs().toFixed(2))}` : formatCurrency(left);
   return (
-    <div className={negative ? 'affordability affordability--short' : 'affordability'}>
-      <h4>Affordability check</h4>
-      <dl className="inline-figures">
-        <div><dt>Monthly take-home pay</dt><dd>{formatCurrency(monthlyTakeHome)}</dd></div>
-        {monthlyExpenses !== undefined && <div><dt>Monthly living expenses</dt><dd>−{formatCurrency(monthlyExpenses)}</dd></div>}
-        <div><dt>{label}</dt><dd>−{formatCurrency(payment)}</dd></div>
-        <div><dt>{monthlyExpenses !== undefined ? 'Left each month' : 'Left before living expenses'}</dt><dd>{negative ? `−${formatCurrency(new D(left).abs().toFixed(2))}` : formatCurrency(left)}</dd></div>
-      </dl>
-      {share && <p className="field-hint">{label} is {share}% of your take-home pay.</p>}
-      {negative && <p className="notice notice--warning"><span className="notice-icon" aria-hidden="true">!</span>This payment is more than {monthlyExpenses !== undefined ? 'what is left after your expenses' : 'your take-home pay'}.</p>}
-    </div>
+    <p className={negative ? 'affordability affordability--short' : 'affordability'}>
+      {share && <>{label} is <strong>{share}%</strong> of take-home. </>}
+      Leaves <strong>{leftText}/mo</strong>{monthlyExpenses !== undefined ? ' after expenses' : ' before living expenses'}.
+      {negative && <> More than {monthlyExpenses !== undefined ? 'what is left after expenses' : 'your take-home pay'}.</>}
+    </p>
   );
 }
 
-function PayoffMode() {
+/** Repayment start: when you choose to start paying, plus each loan's required payment dates. */
+export function RepaymentStart() {
+  return (
+    <>
+      <VoluntaryStartFields />
+      <PaymentTiming headingLevel={4} />
+    </>
+  );
+}
+
+/** "Default % for new income changes" (prefills new income changes only; existing ones keep theirs). */
+export function RaiseDefaultField() {
+  const { plan, update } = usePlanner();
+  return (
+    <PercentField id="postGradIncome.raiseAllocationPercent" label="Default % to debt for new income changes" max="100" className="field--narrow"
+      value={plan.postGradIncome.raiseAllocationPercent} hint="Prefills new changes only."
+      onCommit={raiseAllocationPercent => update(withIncome({ raiseAllocationPercent }), 'Change default share of raises')} />
+  );
+}
+
+/** Optional payoff target: date or duration → the required monthly payment. Never changes the chosen payment. */
+export function PayoffTargetSection() {
   const { plan, update, projection, target, comparisonsUpdating, readiness } = usePlanner();
   const current = plan.repayment.payoffTarget ?? { mode: 'budget' };
   const [lastTarget, setLastTarget] = useState<Exclude<PayoffTarget, { mode: 'budget' }> | null>(current.mode === 'target' ? current : null);
   // Remember the last target so switching back to target mode restores it (adjusted during render).
   if (current.mode === 'target' && current !== lastTarget) setLastTarget(current);
-  const repayment = projection?.repayment;
   const anchor = projection?.firstVoluntaryPaymentDate ?? addMonths(plan.settings.graduationDate, 7);
 
   function setMode(mode: 'budget' | 'target') {
     if (mode === current.mode) return;
     update(withTarget(mode === 'budget' ? { mode: 'budget' } : lastTarget ?? { mode: 'target', kind: 'duration', months: DEFAULT_TARGET_MONTHS }),
-      mode === 'budget' ? 'Switch to choosing a monthly budget' : 'Switch to choosing a payoff target');
+      mode === 'budget' ? 'Turn off payoff target' : 'Set a payoff target');
   }
   function setKind(kind: 'date' | 'duration') {
     if (current.mode !== 'target' || current.kind === kind) return;
@@ -170,26 +157,19 @@ function PayoffMode() {
   }
 
   return (
-    <section className="repayment-block" aria-labelledby="repayment-mode-heading">
-      <h3 id="repayment-mode-heading">How do you want to plan payoff?</h3>
-      <RadioGroup name="repayment.payoffTarget.mode" legend="Planning mode" value={current.mode} onChange={setMode}
+    <>
+      <RadioGroup name="repayment.payoffTarget.mode" legend="Payoff target" value={current.mode} onChange={setMode}
         options={[
-          ['budget', 'Choose a monthly budget → see payoff'],
-          ['target', 'Choose a payoff target → see the required monthly payment'],
+          ['budget', 'No target: use my monthly payment'],
+          ['target', 'Show the payment needed to be debt-free by a target'],
         ]} />
-      {current.mode === 'budget' ? (
-        <dl className="inline-figures payoff-outcome" aria-label="Projected outcome with your monthly budget">
-          <div><dt>Monthly debt budget</dt><dd>{formatCurrency(plan.postGradIncome.monthlyDebtBudget)}</dd></div>
-          <div><dt>Debt-free date</dt><dd><ResultFigure result="debtFreeDate" nonPayoffValue="No debt-free date" value={repayment?.debtFreeDate ? formatMonthYear(repayment.debtFreeDate) : 'No debt-free date'} /></dd></div>
-          <div><dt>Total interest</dt><dd><ResultFigure result="totalInterest" value={formatCurrency(repayment?.totalInterestPaid)} /></dd></div>
-        </dl>
-      ) : (
+      {current.mode === 'target' && (
         <>
-          <RadioGroup name="repayment.payoffTarget.kind" legend="Payoff target" value={current.kind} onChange={setKind}
+          <RadioGroup name="repayment.payoffTarget.kind" legend="Target" value={current.kind} onChange={setKind}
             options={[['date', 'Pay off by date'], ['duration', 'Pay off within years and months']]} />
           {current.kind === 'date'
             ? <DateField id="repayment.payoffTarget.date" label="Pay off by" className="field--narrow" value={current.date}
-                hint="The month of your last payment must be on or before this date."
+                hint="Month of the last payment, at the latest."
                 onCommit={date => update(withTarget({ mode: 'target', kind: 'date', date }), 'Change payoff target date')} />
             : <DurationFields months={current.months} />}
           <TargetResult />
@@ -198,12 +178,7 @@ function PayoffMode() {
       {current.mode === 'target' && readiness.results.targetPayment.state === 'incomplete' && !comparisonsUpdating && target === null && (
         <p className="field-hint">Add a loan with an amount borrowed to calculate the required payment.</p>
       )}
-      <Explain>
-        <p>The required payment is the smallest monthly budget, rounded up to the cent, that pays every loan off by your target in the same month-by-month projection as everything else: your strategy, loan dates, minimum payments and required-payment dates.</p>
-        <p>Life events in your plan are included: income changes add their chosen share from their date and windfalls are applied in their month, on top of the required payment. The result is checked by running the projection again with that payment.</p>
-        <p>"Within N years and months" counts from your first payment. The projection stops after 100 years; if no payment reaches the target within that limit, it says so — that is never forgiveness.</p>
-      </Explain>
-    </section>
+    </>
   );
 }
 
@@ -231,7 +206,7 @@ function DurationFields({ months }: { months: number }) {
         onCommit={value => commit({ years: value }, 'repayment.payoffTarget.months')} />
       <IntegerField id="repayment.payoffTarget.months-part" label="Months" min={0} max={11} value={rest} className="field--narrow"
         onCommit={value => commit({ rest: value }, 'repayment.payoffTarget.months-part')} />
-      <p className="field-hint">Counted from your first payment. Total: {plural(months, 'month')}.</p>
+      <p className="field-hint">From your first payment. Total: {plural(months, 'month')}.</p>
     </fieldset>
   );
 }
@@ -255,21 +230,22 @@ function TargetResult() {
     <div className={`target-result${comparisonsUpdating ? ' is-updating' : ''}`} aria-busy={comparisonsUpdating || undefined} data-status="feasible">
       <dl className="metrics">
         <Figure label="Required monthly payment" value={formatCurrency(required)} detail={`To be debt-free by ${formatMonthYear(target.targetDate)}`} />
-        <Figure label="Your chosen budget" value={formatCurrency(target.chosenMonthlyBudget)} detail="Not changed by this calculation" />
+        <Figure label="Your monthly payment" value={formatCurrency(target.chosenMonthlyBudget)} detail="Not changed by this calculation" />
         <Figure label="Difference" value={differenceSentence(target.difference)} />
-        <Figure label="Projected outcome at the required payment" value={`Debt-free ${formatMonthYear(target.verifiedDebtFreeDate)}`} detail={`${formatCurrency(target.totalInterest)} total interest`} />
+        <Figure label="At the required payment" value={`Debt-free ${formatMonthYear(target.verifiedDebtFreeDate)}`} detail={`${formatCurrency(target.totalInterest)} total interest`} />
       </dl>
+      {target.limitedByMinimum && <p className="field-hint">Your loans' required minimums alone reach this target.</p>}
       <Affordability payment={required} label="The required payment" />
       {!same && (
         <div className="button-row">
-          <button type="button" onClick={() => update(withIncome({ monthlyDebtBudget: required }), 'Use the required payment as my budget')}>
-            Use {formatCurrency(required)} as my monthly budget
+          <button type="button" onClick={() => update(withIncome({ monthlyDebtBudget: required }), 'Use the required payment as my monthly payment')}>
+            Use {formatCurrency(required)} as my monthly payment
           </button>
-          <span className="field-hint">Optional. Your budget only changes if you choose this; you can undo it.</span>
+          <span className="field-hint">Optional. You can undo it.</span>
         </div>
       )}
       {plan.lifeEvents.some(event => event.type === 'income' || event.type === 'windfall') && (
-        <p className="field-hint">Includes your life events: income changes and windfalls add to the required payment from their dates.</p>
+        <p className="field-hint">Includes your income changes and bonuses from their dates.</p>
       )}
     </div>
   );
@@ -297,15 +273,14 @@ function VoluntaryStartFields() {
             ? { kind: 'date', date: addMonths(graduation, start.kind === 'afterGraduation' ? start.months : 6) }
             : { kind: 'afterGraduation', months: 6 }), 'Change when payments start');
         }}
-        options={[['afterGraduation', 'A number of months after graduation'], ['date', 'From a specific date']]} />
+        options={[['afterGraduation', 'Months after graduation'], ['date', 'From a date']]} />
       {start.kind === 'afterGraduation'
         ? <IntegerField id="repayment.voluntaryStart.months" label="Months after graduation" min={0} max={60} value={start.months} className="field--narrow"
-            hint={`0–60. Follows your graduation date (${formatDate(graduation)}). Your first payment is one month after the start.`}
+            hint={`0–60, after ${formatDate(graduation)}. First payment one month later.`}
             onCommit={months => update(withStart({ kind: 'afterGraduation', months }), 'Change when payments start')} />
         : <DateField id="repayment.voluntaryStart.date" label="Start paying from" value={start.date} className="field--narrow"
-            hint="Your first payment is one month after this date. It can't be before your earliest loan disbursement."
+            hint="First payment one month later."
             onCommit={date => update(withStart({ kind: 'date', date }), 'Change when payments start')} />}
-      <p className="field-hint">This is when you choose to start paying. Lenders set when payments are required: if your start is later, the required payments are still owed and are listed below.</p>
     </>
   );
 }
@@ -349,12 +324,8 @@ function CustomOrder() {
 
   return (
     <div className="custom-order">
-      <h4 id="custom-order-heading">Custom payoff order</h4>
-      <p>
-        {plan.repayment.strategyId === 'custom'
-          ? 'Extra payments follow this order exactly.'
-          : `Used when the payoff strategy is "${strategyName('custom')}".`} Drag a loan, or use the Move up and Move down buttons.
-      </p>
+      <h5 id="custom-order-heading">Custom payoff order</h5>
+      <p className="field-hint">Drag a loan, or use Move up and Move down.</p>
       {order.length === 0 ? <p className="empty">Add loans to set a custom order.</p> : (
         <ol className="order-list" aria-labelledby="custom-order-heading">
           {order.map((id, index) => (

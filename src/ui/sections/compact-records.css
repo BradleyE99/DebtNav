@@ -7,3 +7,4 @@
 .compact-record-edit { display: block; margin-top: .4rem; color: var(--accent, #17694f); font-size: .8rem; }
 .compact-record-body { margin-top: 1rem; }
 @media (max-width: 680px) { .compact-record-grid { grid-template-columns: minmax(0, 1fr); } }
+.compact-record-card > summary h4 { display: inline; margin: 0; font-size: 1rem; }

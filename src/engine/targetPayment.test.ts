@@ -113,11 +113,15 @@ describe('US-506 solveTargetPayment', () => {
     expect(solveTargetPayment(plan([loan('a', '5000.00', '0.05')], 'abc'), within(12), TODAY)).toMatchObject({ status: 'invalid', reason: 'missingInputs' });
   });
 
-  it('within 1200 months is feasible (the cap itself is reachable)', () => {
-    const r = feasible(solveTargetPayment(plan([loan('a', '50000.00', '0.07')]), within(1200), TODAY));
-    // Just above the interest-only payment (50000 × 0.07 / 12 = 291.67).
-    expect(new D(r.requiredMonthlyBudget).gt('291.67')).toBe(true);
-    expect(new D(r.requiredMonthlyBudget).lt('300.00')).toBe(true);
+  it('within 1200 months is feasible (the cap itself is reachable); the answer is never below the minimums (D1)', () => {
+    const p = plan([loan('a', '50000.00', '0.07')]);
+    const r = feasible(solveTargetPayment(p, within(1200), TODAY));
+    // A payment just above interest-only (50000 × 0.07 / 12 = 291.67) would reach 100 years, but the lender's
+    // required minimum is higher, so the minimum is the answer.
+    const minimum = project(p, r.requiredMonthlyBudget).loans[0].minimumMonthlyPayment;
+    expect(r.requiredMonthlyBudget).toBe(minimum);
+    expect(new D(minimum).gt('291.67')).toBe(true);
+    expect(r.limitedByMinimum).toBe(true);
   });
 });
 
@@ -137,7 +141,10 @@ describe('US-506 property (fast-check): smallest cent budget that meets the targ
         const r = feasible(solveTargetPayment(p, within(months), TODAY));
         expect(meets(p, r.requiredMonthlyBudget, r.targetDate)).toBe(true);
         expect(project(p, r.requiredMonthlyBudget).debtFreeDate).toBe(r.verifiedDebtFreeDate);
-        if (new D(r.requiredMonthlyBudget).gt(0)) expect(meets(p, new D(r.requiredMonthlyBudget).minus('0.01').toFixed(2), r.targetDate)).toBe(false);
+        // D1: never below the required minimums; above them it is the smallest cent amount that meets the target.
+        const minimums = project(p, r.requiredMonthlyBudget).loans.reduce((total, l) => total.plus(l.minimumMonthlyPayment), new D(0));
+        expect(new D(r.requiredMonthlyBudget).gte(minimums)).toBe(true);
+        if (!r.limitedByMinimum && new D(r.requiredMonthlyBudget).gt(0)) expect(meets(p, new D(r.requiredMonthlyBudget).minus('0.01').toFixed(2), r.targetDate)).toBe(false);
       }), { numRuns: 40 });
   });
 });

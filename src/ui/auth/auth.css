@@ -9,10 +9,20 @@
 .auth-setup { padding: 14px 16px; border: 1px solid var(--warn-line); background: var(--warn-soft); color: var(--warn-ink); border-radius: 8px; overflow-wrap: anywhere; }
 .auth-setup h3 { margin: 0 0 6px; font-size: 1.05rem; }
 .auth-setup code { font-size: 0.9em; }
-.account-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
-.account-header__email { font-size: 0.9rem; color: var(--ink-2); overflow-wrap: anywhere; min-width: 0; }
 .device-plan { margin: 12px 0; padding: 16px 18px; border: 2px solid var(--accent); border-radius: var(--radius); background: var(--surface); }
 .device-plan h2 { margin: 0 0 6px; font-size: 1.15rem; }
 @media (max-width: 600px) {
   .public-page { padding: 0 12px 20px; }
 }
+
+/* Header account menu. */
+.account-menu { position: relative; }
+.account-menu__button { gap: 6px; padding: 0.45rem 0.8rem; }
+.account-menu__panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 220px; max-width: min(320px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15); padding: 8px; }
+.account-menu__panel[hidden] { display: none; }
+.account-menu__email { margin: 4px 8px 8px; font-size: 0.9rem; color: var(--ink-2); overflow-wrap: anywhere; }
+.account-menu__panel ul { list-style: none; margin: 0; padding: 0; }
+.account-menu__panel li button { width: 100%; justify-content: flex-start; border: 0; background: none; color: var(--ink); font-weight: 500; }
+.account-menu__panel li button:hover { background: var(--accent-soft); }
+@media (max-width: 560px) { .account-menu__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } }
+@media print { .account-menu { display: none; } }

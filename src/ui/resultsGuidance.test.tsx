@@ -115,21 +115,20 @@ describe('empty plan (§8.1)', () => {
     expect(status!.textContent).toMatch(/0 of \d+ key results ready · 2 items needed/);
   });
 
-  it('Overview "At a glance" shows no debt-free date and no $0.00 totals', async () => {
+  it('the Results headline shows no debt-free date and no $0.00 totals', async () => {
     renderPlanner({ plan: createDefaultPlan() });
-    act(() => navigateTo('overview'));
-    const card = document.querySelector('.key-figures') as HTMLElement;
-    expect(card).not.toBeNull();
-    const values = [...card.querySelectorAll('dd')].map(dd => dd.textContent ?? '');
-    expect(values.length).toBeGreaterThan(0);
+    await goToResults();
+    const headline = document.querySelector('.results-headline') as HTMLElement;
+    expect(headline).not.toBeNull();
+    const values = [...headline.querySelectorAll('dd')].map(dd => dd.textContent ?? '');
+    expect(values).toHaveLength(5);
     for (const value of values) {
       expect(value).not.toMatch(MONTH_YEAR);
       expect(value).not.toMatch(/\$0\.00/);
     }
-    for (const id of ['key-debt-free', 'key-interest', 'key-gap']) {
+    for (const id of ['headline-total-debt', 'headline-debt-free', 'headline-time', 'headline-interest']) {
       expect(screen.getByTestId(id).getAttribute('data-state'), id).toBe('incomplete');
     }
-    // Same checklist component on Overview.
     expect(row('loans.none')).not.toBeNull();
   });
 });
@@ -151,10 +150,9 @@ describe('partial plans', () => {
     await goToResults();
     expect(row('costs.none')).toBeNull();
     expect(row('loans.none')).not.toBeNull();
-    act(() => navigateTo('overview'));
-    expect(screen.getByTestId('key-gap').textContent).toMatch(/20,000\.00/);
-    expect(screen.getByTestId('key-gap').getAttribute('data-state')).toBe('complete');
-    expect(screen.getByTestId('key-debt-free').getAttribute('data-state')).toBe('incomplete');
+    expect(screen.getByTestId('headline-debt-free').getAttribute('data-state')).toBe('incomplete');
+    act(() => navigateTo('school'));
+    expect(document.querySelector('.gap-main dd')?.textContent).toMatch(/20,000\.00/);
   });
 
   it('all loans at $0 → asks for the loan amount, no debt-free date', async () => {
@@ -172,7 +170,7 @@ describe('partial plans', () => {
 });
 
 describe('budget states (§8.7, §8.8)', () => {
-  it('budget $0 → budget.zero missing, action opens Repayment Plan and focuses the monthly budget', async () => {
+  it('budget $0 → budget.zero missing, action opens Results and focuses the monthly payment', async () => {
     const p = complete(p => { p.postGradIncome.monthlyDebtBudget = '0.00'; });
     renderPlanner({ plan: p });
     await goToResults();
@@ -186,7 +184,7 @@ describe('budget states (§8.7, §8.8)', () => {
     const results = document.getElementById('results')!;
     expect(results.textContent).toMatch(/not paid off|no debt-free date/i);
     expect(row('repayment.nonPayoff')).not.toBeNull();
-    expect(within(row('repayment.nonPayoff')!).getByRole('button').textContent).toMatch(/budget/i);
+    expect(within(row('repayment.nonPayoff')!).getByRole('button').textContent).toMatch(/monthly payment/i);
   });
 
   it('budget below minimums → shortfall warning visible on Results', async () => {
@@ -350,17 +348,36 @@ describe('accessibility', () => {
 });
 
 describe('Costs: Create loan from gap (§8.10)', () => {
+  it('offers only what the year still needs; "Fully funded" when its loans cover gap + buffer', async () => {
+    renderPlanner({ plan: plan(p => {
+      p.schoolYears[0].costItems = [cost('c', '5000.00')];
+      p.loans = [loan('L1', '3000.00', { academicYear: '2026-2027' })];
+    }) });
+    act(() => navigateTo('school'));
+    const button = document.getElementById(`schoolYears.${createDefaultPlan().schoolYears[0].id}.createLoan`)!;
+    expect(button.textContent).toMatch(/^Create loan for \$2,000\.00/);
+    expect(document.querySelector('.gap-main dd')?.textContent).toBe('$5,000.00');
+    cleanup();
+    renderPlanner({ plan: plan(p => {
+      p.schoolYears[0].costItems = [cost('c', '5000.00')];
+      p.loans = [loan('L1', '5000.00', { academicYear: '2026-2027' })];
+    }) });
+    act(() => navigateTo('school'));
+    const covered = screen.getByRole('button', { name: /^Fully funded for Year 1$/ });
+    expect(covered.hasAttribute('disabled')).toBe(true);
+  });
+
   it('is disabled when the year has no gap', async () => {
     renderPlanner({ plan: createDefaultPlan() });
     act(() => navigateTo('school'));
-    const button = screen.getAllByRole('button', { name: /create loan from gap/i })[0];
+    const button = screen.getAllByRole('button', { name: /^create loan for year 1$/i })[0];
     expect(button.hasAttribute('disabled')).toBe(true);
   });
 
   it('is enabled when the year has a gap', async () => {
     renderPlanner({ plan: plan(p => { p.schoolYears[0].costItems = [cost('c', '5000.00')]; }) });
     act(() => navigateTo('school'));
-    const button = screen.getAllByRole('button', { name: /create loan from gap/i })[0];
+    const button = screen.getAllByRole('button', { name: /create loan for \$5,000\.00/i })[0];
     expect(button.hasAttribute('disabled')).toBe(false);
   });
 });
@@ -387,7 +404,7 @@ describe('follow-up guidance (brief §10 gaps)', () => {
     await goToResults();
     const draftRow = await waitFor(() => { const r = row('draft.loans.L1.annualRate'); expect(r).not.toBeNull(); return r!; });
     expect(draftRow.dataset.severity).toBe('invalid');
-    expect(badgeText(sidebarLink('Loans'))).toMatch(/1 item needed/);
+    expect(badgeText(sidebarLink('Loan Amounts'))).toMatch(/1 item needed/);
 
     await user.click(within(draftRow).getByRole('button', { name: /fix this value/i }));
     await waitFor(() => expect(document.activeElement?.id).toBe('loans.L1.annualRate'));
@@ -403,56 +420,57 @@ describe('follow-up guidance (brief §10 gaps)', () => {
     await waitFor(() => expect(row('draft.loans.L1.annualRate')).toBeNull());
   });
 
-  it('sidebar badges show missing + invalid counts per dashboard, as a description that keeps the link name', async () => {
+  it('tab badges show missing + invalid counts per destination, as a description that keeps the link name', async () => {
     const p = createDefaultPlan();
     const expected = readinessOf(p).byDashboard;
     const view = renderPlanner({ plan: p });
     expect(expected.loans).toBeGreaterThan(0);
-    for (const item of [['Loans', expected.loans], ['Costs', expected.school], ['Results', expected.results]] as const) {
+    for (const item of [['Loan Amounts', expected.loans], ['College Costs', expected.school], ['Results', expected.results]] as const) {
       const link = sidebarLink(item[0]);
       if (item[1]) expect(badgeText(link), item[0]).toBe(`${item[1]} item${item[1] === 1 ? '' : 's'} needed`);
       else expect(link.hasAttribute('aria-describedby'), item[0]).toBe(false);
     }
     // The visible count is hidden from assistive tech (the description carries it).
-    const badge = sidebarLink('Loans').querySelector('.shell-badge');
+    const badge = sidebarLink('Loan Amounts').querySelector('.tab-badge');
     expect(badge?.getAttribute('aria-hidden')).toBe('true');
     expect(badge?.textContent).toBe(String(expected.loans));
 
     act(() => { view.store().updatePlan(plan => ({ ...plan, loans: [loan('L1', '5000.00')] })); });
-    await waitFor(() => expect(sidebarLink('Loans').hasAttribute('aria-describedby')).toBe(false));
+    await waitFor(() => expect(sidebarLink('Loan Amounts').hasAttribute('aria-describedby')).toBe(false));
   });
 
-  it('following a checklist action shows "Back to Results" on the destination; other navigation clears it', async () => {
+  it('following a checklist action to another destination shows "Back to Results"; other navigation clears it', async () => {
     const user = userEvent.setup();
-    renderPlanner({ plan: complete(p => { p.postGradIncome.monthlyDebtBudget = '0.00'; }) });
+    renderPlanner({ plan: complete(p => { p.loans = [loan('L1', '0.00')]; }) });
     await goToResults();
     expect(screen.queryByRole('link', { name: /back to/i })).toBeNull();
-    await user.click(within(row('budget.zero')!).getByRole('button'));
-    await waitFor(() => expect(document.activeElement?.id).toBe('postGradIncome.monthlyDebtBudget'));
+    await user.click(within(row('loans.allZero')!).getByRole('button'));
+    await waitFor(() => expect(document.activeElement?.id).toBe('loans.L1.principal'));
     await user.click(screen.getByRole('link', { name: 'Back to Results' }));
     await waitFor(() => expect(window.location.hash).toBe('#results'));
     expect(document.querySelector('.dashboard')?.getAttribute('data-dashboard')).toBe('results');
     expect(screen.queryByRole('link', { name: /back to/i })).toBeNull();
 
-    await user.click(within(row('budget.zero')!).getByRole('button'));
+    await user.click(within(row('loans.allZero')!).getByRole('button'));
     await waitFor(() => expect(screen.getByRole('link', { name: 'Back to Results' })).toBeTruthy());
-    act(() => navigateTo('loans'));
+    act(() => navigateTo('school'));
     expect(screen.queryByRole('link', { name: /back to/i })).toBeNull();
   });
 
-  it('actions followed from Overview offer "Back to Overview"', async () => {
+  it('an action whose field is on Results opens its section there (no Back link needed)', async () => {
     const user = userEvent.setup();
-    renderPlanner({ plan: createDefaultPlan() });
-    act(() => navigateTo('overview'));
-    const action = within(screen.getByRole('main')).getAllByRole('button', { name: /add a loan/i })[0];
-    await user.click(action);
-    await waitFor(() => expect(window.location.hash).toBe('#loans'));
-    expect(screen.getByRole('link', { name: 'Back to Overview' })).toBeTruthy();
+    renderPlanner({ plan: complete(p => { p.postGradIncome.monthlyDebtBudget = '0.00'; }) });
+    await goToResults();
+    expect((document.getElementById('results-earnings') as HTMLDetailsElement).open).toBe(false);
+    await user.click(within(row('budget.zero')!).getByRole('button'));
+    await waitFor(() => expect(document.activeElement?.id).toBe('postGradIncome.monthlyDebtBudget'));
+    expect((document.getElementById('results-earnings') as HTMLDetailsElement).open).toBe(true);
+    expect(screen.queryByRole('link', { name: /back to/i })).toBeNull();
   });
 
   // US-506 replaced the user-facing projection horizon (and its "Lengthen projection horizon" action) with an
-  // internal 100-year cap: the only action left is the budget, which opens Repayment Plan.
-  it('payoff beyond the modeled limit: the checklist says so and its budget action opens Repayment Plan', async () => {
+  // internal 100-year cap: the only action left is the monthly payment (Results → Earnings & payment).
+  it('payoff beyond the modeled limit: the checklist says so and its action opens the monthly payment', async () => {
     const user = userEvent.setup();
     const base = complete();
     const outputs = calculatePlannerOutputs(base);
@@ -464,10 +482,9 @@ describe('follow-up guidance (brief §10 gaps)', () => {
     expect(nonPayoff.textContent).toMatch(/modeled limit of 100 years/);
     expect(within(nonPayoff).getAllByRole('button')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /horizon/i })).toBeNull();
-    await user.click(within(nonPayoff).getByRole('button', { name: /budget/i }));
-    await waitFor(() => expect(window.location.hash).toBe('#repayment'));
+    await user.click(within(nonPayoff).getByRole('button', { name: /monthly payment/i }));
+    await waitFor(() => expect(window.location.hash).toBe('#results'));
     await waitFor(() => expect(document.activeElement?.id).toBe('postGradIncome.monthlyDebtBudget'));
-    expect(screen.getByRole('link', { name: 'Back to Results' })).toBeTruthy();
     expect(screen.queryByLabelText(/projection horizon/i)).toBeNull();
   });
 });

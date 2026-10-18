@@ -19,6 +19,9 @@ export interface ProjectionOptions {
    * non-amortizing month on or after it ends the projection; before it the projection continues.
    * Omit when the budget may change until the horizon. */
   budgetStableFrom?: ISODate;
+  /** With monthlyBudget: the part of month `month`'s budget that comes from windfalls (C4/D9), so the
+   * schedule can report how much of it was actually paid (`windfallApplied`). */
+  monthlyWindfall?: (date: ISODate, month: number) => Decimal;
   /**
    * US-507: the voluntary start S. The month grid starts here (first payment S + 1 month). Default
    * (M1 plans): graduation + settings.graceMonths, which is then validated; when set, graceMonths is ignored.
@@ -192,6 +195,9 @@ export function calculateProjection(plan: Plan, options: ProjectionOptions = {})
   // this list exactly when its balance reaches zero.
   let active: number[] = [];
   for (let i = 0; i < count; i++) if (entries[i] === 0 && balances[i].gt(0)) active.push(i);
+  // Everything owed at the voluntary start (C2/D3): balance + interest kept separate (uncapitalized).
+  let owedAtStart = zero;
+  for (const i of active) owedAtStart = owedAtStart.plus(balances[i]).plus(unpaidInterest[i]);
   // Formatted balances, reused as the strategy input for the next month.
   const balanceTexts = balances.map(balance => money(balance));
   const interests: Decimal[] = new Array<Decimal>(count).fill(zero);
@@ -202,10 +208,11 @@ export function calculateProjection(plan: Plan, options: ProjectionOptions = {})
   let status: 'paidOff' | 'notAmortizing' | 'horizonExceeded' = 'paidOff';
   for (let month = 1; (active.length > 0 || nextPending < pending.length) && month <= horizon; month++) {
     const date = addMonths(repaymentStartDate, month);
+    let newBorrowing = zero;
     if (nextPending < pending.length && entries[pending[nextPending]] === month - 1) {
       while (nextPending < pending.length && entries[pending[nextPending]] === month - 1) {
         const i = pending[nextPending++];
-        if (balances[i].gt(0)) active.push(i);
+        if (balances[i].gt(0)) { active.push(i); newBorrowing = newBorrowing.plus(balances[i]).plus(unpaidInterest[i]); }
       }
       active.sort((a, b) => a - b);
     }
@@ -279,6 +286,7 @@ export function calculateProjection(plan: Plan, options: ProjectionOptions = {})
     }
     const rows: LoanPayment[] = [];
     let rowInterest = zero;
+    let rowCharged = zero;
     let rowPrincipal = zero;
     let remaining = zero;
     let paidOff = false;
@@ -295,8 +303,9 @@ export function calculateProjection(plan: Plan, options: ProjectionOptions = {})
       const owed = separateInterest ? balances[i].plus(unpaidInterest[i]) : balances[i];
       const owedText = money(owed);
       balanceTexts[i] = separateInterest ? money(balances[i]) : owedText;
-      rows.push({ loanId: p.loans[i].id, payment: money(payments[i]), interest: money(paidInterest), principal: money(principal), remainingBalance: owedText });
+      rows.push({ loanId: p.loans[i].id, payment: money(payments[i]), interest: money(paidInterest), interestCharged: money(interests[i]), principal: money(principal), remainingBalance: owedText });
       rowInterest = rowInterest.plus(paidInterest);
+      rowCharged = rowCharged.plus(interests[i]);
       rowPrincipal = rowPrincipal.plus(principal);
       remaining = remaining.plus(owed);
       if (!balances[i].gt(0)) paidOff = true;
@@ -326,7 +335,19 @@ export function calculateProjection(plan: Plan, options: ProjectionOptions = {})
     if (paidOff) active = active.filter(i => balances[i].gt(0));
     totalScheduledInterest = totalScheduledInterest.plus(rowInterest);
     totalPayments = totalPayments.plus(paymentTotal);
-    schedule.push({ month, date, loans: rows, payment: money(paymentTotal), interest: money(rowInterest), principal: money(rowPrincipal), remainingBalance: money(remaining) });
+    // D9: the month's regular amount is used first; the windfall covers only what is paid beyond it.
+    let windfallApplied = zero;
+    if (options.monthlyWindfall) {
+      const windfall = options.monthlyWindfall(date, month);
+      if (windfall.gt(0)) {
+        const beyondRegular = paymentTotal.minus(availableBudget.minus(windfall));
+        windfallApplied = beyondRegular.gt(0) ? minOf(windfall, beyondRegular) : zero;
+      }
+    }
+    schedule.push({
+      month, date, loans: rows, payment: money(paymentTotal), interest: money(rowInterest), interestCharged: money(rowCharged),
+      newBorrowing: money(newBorrowing), windfallApplied: money(windfallApplied), principal: money(rowPrincipal), remainingBalance: money(remaining),
+    });
     if (stopProjection) { status = 'notAmortizing'; break; }
   }
   if (status === 'paidOff' && (active.length > 0 || nextPending < pending.length)) {
@@ -338,7 +359,7 @@ export function calculateProjection(plan: Plan, options: ProjectionOptions = {})
   const totalInterestPaid = status === 'paidOff'
     ? money(sum(loans.map((loan, i) => capitalizedTotals[i].plus(loan.inSchoolInterestPaid))).plus(totalScheduledInterest))
     : null;
-  return { ok: true, value: { status, repaymentStartDate, firstPaymentDate: addMonths(repaymentStartDate, 1), loans, balanceAtRepaymentStart: money(sum(loans.map(loan => loan.balanceAtRepaymentStart))), inSchoolInterestPayments, amortizationSchedule: schedule, debtFreeDate: status === 'paidOff' ? schedule.at(-1)?.date ?? repaymentStartDate : null, totalInterestPaid, totalRepaymentPayments: money(totalPayments), warnings } };
+  return { ok: true, value: { status, repaymentStartDate, firstPaymentDate: addMonths(repaymentStartDate, 1), loans, balanceAtRepaymentStart: money(sum(loans.map(loan => loan.balanceAtRepaymentStart))), owedAtVoluntaryStart: money(owedAtStart), inSchoolInterestPayments, amortizationSchedule: schedule, debtFreeDate: status === 'paidOff' ? schedule.at(-1)?.date ?? repaymentStartDate : null, totalInterestPaid, totalRepaymentPayments: money(totalPayments), warnings } };
 }
 
 const TWELVE = new D(12);

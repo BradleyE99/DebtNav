@@ -1,61 +1,50 @@
-// @vitest-environment jsdom
-/** US-903 Overview as introduction + navigation hub; also the public signed-out page (US-1201). */
+/// @vitest-environment jsdom
+/** Introduction (signed-in tab) and the public signed-out page (US-1201), plus the header account menu. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { renderPlanner, samplePlan } from '../testing/renderPlanner';
+import { createDefaultPlan } from '../../engine/planner';
 import {
-  AccountHeader, AuthError, AuthNotConfigured, DevicePlanPrompt, PublicOverview, SignInButton, SignInNotice,
+  AuthError, AuthNotConfigured, DevicePlanPrompt, PublicOverview, SignInButton, SignInNotice,
 } from '../auth';
 
 afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); });
 
-const CARDS: [string, string, string][] = [
-  ['Open Costs', 'school', 'School costs & resources'],
-  ['Open How much I make', 'income', 'Income & Earnings'],
-  ['Open Loans', 'loans', 'Your loans'],
-  ['Open Repayment Plan', 'repayment', 'Repayment Plan'],
-  ['Open Results', 'results', 'Your live results'],
-];
-
-describe('signed-in Overview', () => {
-  it('introduces the two tasks and links to Loans, How much I make, Repayment Plan, Results and Costs', async () => {
+describe('signed-in Introduction', () => {
+  it('states the two questions and continues to the next destination that needs input', async () => {
     const user = userEvent.setup();
-    renderPlanner({ plan: samplePlan() });
-    const overview = screen.getByRole('region', { name: 'Overview' });
-    expect(within(overview).getByRole('heading', { name: '1. Plan each year\'s borrowing' })).toBeTruthy();
-    expect(within(overview).getByRole('heading', { name: '2. Plan repayment' })).toBeTruthy();
-    for (const [name, id, heading] of CARDS) {
-      await user.click(within(screen.getByRole('region', { name: 'Overview' })).getByRole('link', { name }));
-      expect(window.location.hash).toBe(`#${id}`);
-      expect(screen.getByRole('heading', { level: 2, name: heading })).toBeTruthy();
-      await user.click(screen.getByRole('link', { name: 'Overview' }));
-    }
+    renderPlanner({ plan: createDefaultPlan() });
+    const intro = screen.getByRole('region', { name: 'Plan your student loans' });
+    expect(within(intro).getByRole('heading', { name: 'How much do I need to borrow?' })).toBeTruthy();
+    expect(within(intro).getByRole('heading', { name: 'When will I be debt-free?' })).toBeTruthy();
+    expect(intro.textContent).toMatch(/items? needed/);
+    // An empty plan first needs school costs (or a loan): Continue opens that destination.
+    const next = within(intro).getByRole('link', { name: /^Continue to / });
+    await user.click(next);
+    expect(['school', 'loans']).toContain(document.querySelector('.dashboard')?.getAttribute('data-dashboard'));
   });
 
-  it('does not duplicate Results charts or tables', () => {
-    renderPlanner({ plan: samplePlan() });
-    const overview = screen.getByRole('region', { name: 'Overview' });
-    expect(overview.querySelector('table, svg.balance-chart, .chart')).toBeNull();
-  });
-
-  it('cards summarize what each dashboard holds', () => {
-    renderPlanner({ plan: samplePlan() });
-    const overview = screen.getByRole('region', { name: 'Overview' });
-    expect(overview.textContent).toContain('2 loans · $25,000.00');
-    expect(overview.textContent).toContain('Budget $600.00/mo');
+  it('continues to Results when nothing is needed, and shows no Results figures, charts or tables', () => {
+    const plan = samplePlan();
+    for (const year of plan.schoolYears) if (!year.costItems.length) year.costItems = [{ id: `c-${year.id}`, category: 'tuition', label: 'Tuition', amount: '1000.00', semester: 'annual' }];
+    renderPlanner({ plan });
+    const intro = screen.getByRole('region', { name: 'Plan your student loans' });
+    expect(within(intro).getByRole('link', { name: /^Continue to / }).getAttribute('href')).toMatch(/^#(results|school|loans)$/);
+    expect(intro.querySelector('table, svg, dl')).toBeNull();
+    expect(intro.textContent).not.toMatch(/\$/);
   });
 });
 
 describe('public signed-out page and auth pieces (presentational)', () => {
-  it('renders the same introduction without a PlannerStore, with the sign-in slot and no dashboard links', async () => {
+  it('renders the same introduction without a PlannerStore, with the sign-in slot and no destination links', async () => {
     const onSignIn = vi.fn();
     render(<PublicOverview signIn={<SignInButton onSignIn={onSignIn} />} notice={<SignInNotice kind="cancelled" />} />);
     expect(screen.getByRole('heading', { level: 1, name: 'DebtNav' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Plan your student loans' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'What you can do after signing in' })).toBeTruthy();
-    for (const title of ['Costs', 'How much I make', 'Loans', 'Repayment Plan', 'Results']) expect(screen.getByRole('heading', { level: 4, name: title })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'How much do I need to borrow?' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'When will I be debt-free?' })).toBeTruthy();
     expect(screen.queryAllByRole('link').filter(link => link.getAttribute('href')?.startsWith('#') && link.getAttribute('href') !== '#main')).toEqual([]);
     expect(screen.getByRole('status').textContent).toMatch(/Sign-in was cancelled/);
     await userEvent.click(screen.getByRole('button', { name: 'Sign in with Google' }));
@@ -99,15 +88,7 @@ describe('public signed-out page and auth pieces (presentational)', () => {
     expect(onRetry).toHaveBeenCalled();
   });
 
-  it('the signed-in header shows the email and signs out', async () => {
-    const onSignOut = vi.fn();
-    render(<AccountHeader email="student@example.com" onSignOut={onSignOut} />);
-    expect(screen.getByText('student@example.com')).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-    expect(onSignOut).toHaveBeenCalled();
-  });
-
-  it('PlannerApp shows the account header when an account is passed', async () => {
+  it('PlannerApp shows the account menu (email, data, undo history, disclaimer, sign out) when an account is passed', async () => {
     const onSignOut = vi.fn();
     const { default: PlannerApp } = await import('../PlannerApp');
     const { usePlannerDocument } = await import('../../state/usePlannerDocument');
@@ -116,10 +97,34 @@ describe('public signed-out page and auth pieces (presentational)', () => {
     function Harness() { return <PlannerApp store={usePlannerDocument({ storage, debounceMs: 0 })} account={{ email: 'a@b.example', onSignOut }} devicePlanPrompt={<p>device prompt slot</p>} />; }
     window.scrollTo = () => {};
     render(<Harness />);
-    expect(within(screen.getByRole('banner')).getByText('a@b.example')).toBeTruthy();
     expect(screen.getByText('device prompt slot')).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    const user = userEvent.setup();
+    const menuButton = within(screen.getByRole('banner')).getByRole('button', { name: /^Account/ });
+    expect(menuButton.getAttribute('aria-expanded')).toBe('false');
+    await user.click(menuButton);
+    expect(menuButton.getAttribute('aria-expanded')).toBe('true');
+    expect(within(screen.getByRole('banner')).getByText('a@b.example')).toBeTruthy();
+    for (const name of ['Your data', 'Undo history', 'About these estimates', 'Sign out']) expect(screen.getByRole('button', { name })).toBeTruthy();
+    // Escape closes the menu and returns focus to its button.
+    await user.keyboard('{Escape}');
+    expect(menuButton.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(menuButton);
+    await user.click(menuButton);
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(onSignOut).toHaveBeenCalled();
+  });
+
+  it('the account menu opens Your data in a dialog; without an account it has no Sign out', async () => {
+    const user = userEvent.setup();
+    renderPlanner({ plan: samplePlan() });
+    await user.click(screen.getByRole('button', { name: /^Account/ }));
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Your data' }));
+    const dialog = screen.getByRole('dialog', { name: 'Your data' });
+    expect(within(dialog).getByRole('button', { name: 'Export plan (JSON)' })).toBeTruthy();
+    expect(document.activeElement?.textContent).toBe('Your data');
+    await user.click(within(dialog).getByRole('button', { name: /^Close/ }));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('device plan prompt: explicit use or keep, focus on its heading, busy and error states', async () => {

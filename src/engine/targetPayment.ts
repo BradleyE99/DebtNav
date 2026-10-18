@@ -8,8 +8,9 @@
  * chosen budget is never modified (inputs are not mutated).
  *
  * Algorithm: integer-cent bisection over [lo, hi] with the invariant "lo does not meet the target,
- * hi does" (meets = paid off with a debt-free date on or before the target). hi starts at the total
- * principal and doubles until it meets the target (or exceeds $1,000,000,000 → infeasible).
+ * hi does" (meets = paid off with a debt-free date on or before the target). lo starts at the sum of the
+ * required minimums (D1: the answer is never below them; if they meet the target they are the answer,
+ * flagged limitedByMinimum). hi starts at the total principal and doubles until it meets the target (or exceeds $1,000,000,000 → infeasible).
  * Monotonicity (a larger budget never pays off later) is the engine's NFR-3 property and is tested
  * by a property test. The answer is re-run once to verify and report its debt-free date.
  * Pure: `today` is supplied by the caller (UTC date).
@@ -94,13 +95,20 @@ export function solveTargetPayment(plan: PlannerPlan, target: PayoffTargetGoal, 
     const meets = (projection: Projection | null): boolean =>
       projection !== null && projection.status === 'paidOff' && projection.debtFreeDate !== null && projection.debtFreeDate <= targetDate;
 
+    // D1/C10: the answer is never below the required minimums (Σ of each loan's minimum in the
+    // chosen plan). If the minimums alone reach the target, they are the answer (limitedByMinimum).
+    const reference = repaymentFor(plan);
+    if (!reference.ok) throw new SolverInputError(reference.errors);
+    const minimumCents = sum(reference.value.loans.map(loan => loan.minimumMonthlyPayment)).times(100).ceil().toNumber();
     let best: { cents: number; projection: Projection };
-    const zero = run(0);
-    if (meets(zero)) {
-      best = { cents: 0, projection: zero! };
+    let limitedByMinimum = false;
+    const atMinimum = run(minimumCents);
+    if (meets(atMinimum)) {
+      best = { cents: minimumCents, projection: atMinimum! };
+      limitedByMinimum = true;
     } else {
-      let lo = 0;
-      let hi = Math.max(1, sum(plan.loans.map(loan => loan.principal)).times(100).ceil().toNumber());
+      let lo = minimumCents;
+      let hi = Math.max(minimumCents + 1, sum(plan.loans.map(loan => loan.principal)).times(100).ceil().toNumber());
       let hiRun = run(hi);
       while (!meets(hiRun)) {
         lo = hi;
@@ -138,6 +146,7 @@ export function solveTargetPayment(plan: PlannerPlan, target: PayoffTargetGoal, 
       targetDate,
       verifiedDebtFreeDate: verify.value.debtFreeDate!,
       totalInterest: verify.value.totalInterestPaid,
+      limitedByMinimum,
       iterations,
     };
   } catch (error) {
