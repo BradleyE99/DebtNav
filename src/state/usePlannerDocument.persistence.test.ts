@@ -2,6 +2,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultPlan } from '../engine/planner';
+import { SCHEMA_VERSION } from '../engine/planner-contracts';
 import type { PlannerPlan, StorageLike } from '../engine/planner-contracts';
 import { LEGACY_STORAGE_KEYS, STORAGE_KEY, exportDocument } from '../data/storage';
 import { usePlannerDocument } from './usePlannerDocument';
@@ -57,7 +58,7 @@ describe('autosave and reload (US-1001)', () => {
     act(() => {
       first.result.current.updatePlan(plan => ({
         ...plan,
-        loans: [{ id: 'l1', name: 'Loan', type: 'subsidized', principal: '3500.00', annualRate: '0.0553', disbursementDate: plan.settings.startDate, termMonths: 120, schoolYearId: plan.schoolYears[0].id }],
+        loans: [{ id: 'l1', name: 'Loan', type: 'subsidized', principal: '3500.00', annualRate: '0.0553', disbursementDate: plan.settings.startDate, termMonths: 120, schoolYearId: plan.schoolYears[0].id, academicYear: '2026-2027' }],
         scenarios: [{ id: 's1', name: 'Faster', overrides: { 'repayment.extraMonthlyPayment': '100.00' } }],
       }));
       first.result.current.dismissDisclaimer();
@@ -145,14 +146,16 @@ describe('import and export through the store (US-1002)', () => {
     act(() => { vi.runAllTimers(); });
     const before = storage.getItem(STORAGE_KEY);
     const plan = result.current.document;
-    const future = exportDocument({ plan: createDefaultPlan(), disclaimerDismissed: false }).replace('"schemaVersion": 3', '"schemaVersion": 4');
+    const future = exportDocument({ plan: createDefaultPlan(), disclaimerDismissed: false }).replace(`"schemaVersion": ${SCHEMA_VERSION}`, `"schemaVersion": ${SCHEMA_VERSION + 1}`);
+    const historyBefore = result.current.history.entries;
     let outcome!: ReturnType<typeof result.current.importText>;
     act(() => { outcome = result.current.importText(future); });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.errors[0].message).toMatch(/newer version/);
     expect(result.current.document).toBe(plan);
     expect(storage.getItem(STORAGE_KEY)).toBe(before);
-    expect(result.current.undo).toBeNull();
+    // A rejected import adds nothing to the undo history.
+    expect(result.current.history.entries).toEqual(historyBefore);
   });
 
   it('an older-version (v2) import is migrated and saved', () => {
@@ -162,7 +165,7 @@ describe('import and export through the store (US-1002)', () => {
     const text = JSON.stringify({ schemaVersion: 2, savedAt: '2026-01-01T00:00:00.000Z', document: { plan: v2plan, drafts: {}, disclaimerDismissed: true } });
     act(() => { result.current.importText(text); });
     expect(result.current.document.plan.repayment.strategyId).toBe('avalanche');
-    expect(JSON.parse(storage.data.get(STORAGE_KEY)!).schemaVersion).toBe(3);
+    expect(JSON.parse(storage.data.get(STORAGE_KEY)!).schemaVersion).toBe(SCHEMA_VERSION);
   });
 
   it('exportJson never includes derived projection data', () => {
@@ -202,13 +205,14 @@ describe('reference integrity on edits', () => {
   });
 });
 
-describe('disbursement after repayment start is attributed to the edited field (review M1)', () => {
+describe('disbursement after a loan repayment start is attributed to the edited field (review M1, v4 per-loan dates)', () => {
+  // Federal Direct loan: repayment period starts graduation + 6 months (FEDERAL_GRACE_MONTHS).
   const withLoan = (date: string) => (plan: PlannerPlan): PlannerPlan => ({
     ...plan,
-    loans: [{ id: 'l1', name: 'Spring loan', type: 'private', principal: '100.00', annualRate: '0.05', disbursementDate: date, termMonths: 120 }],
+    loans: [{ id: 'l1', name: 'Spring loan', type: 'unsubsidized', principal: '100.00', annualRate: '0.05', disbursementDate: date, termMonths: 120 }],
   });
 
-  it('a graduation edit that would put repayment before an existing loan is rejected at settings.graduationDate', () => {
+  it('a graduation edit that would put required payments before an existing loan is rejected at settings.graduationDate', () => {
     const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
     act(() => { result.current.updatePlan(withLoan('2030-01-10')); });
     const before = result.current.document;
@@ -216,18 +220,19 @@ describe('disbursement after repayment start is attributed to the edited field (
     act(() => { outcome = result.current.updatePlan(plan => ({ ...plan, settings: { ...plan.settings, graduationDate: '2029-05-20' } })); });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.errors).toEqual([expect.objectContaining({ path: 'settings.graduationDate' })]);
-    expect(outcome.errors[0].message).toMatch(/2029-11-20.*"Spring loan" \(2030-01-10\)/);
+    expect(outcome.errors.map(e => e.path)).toContain('settings.graduationDate');
+    expect(outcome.errors.map(e => e.path)).not.toContain('loans.l1.disbursementDate');
+    expect(outcome.errors.find(e => e.path === 'settings.graduationDate')!.message).toMatch(/2029-11-20.*"Spring loan" \(2030-01-10\)/);
     expect(result.current.document).toBe(before);
   });
 
-  it('a grace edit is rejected at settings.graceMonths', () => {
+  it('a voluntary start before the first disbursement is rejected at repayment.voluntaryStart.months', () => {
     const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
     act(() => { result.current.updatePlan(withLoan('2030-08-01')); });
     let outcome!: ReturnType<typeof result.current.updatePlan>;
-    act(() => { outcome = result.current.updatePlan(plan => ({ ...plan, settings: { ...plan.settings, graceMonths: 0 } })); });
+    act(() => { outcome = result.current.updatePlan(plan => ({ ...plan, repayment: { ...plan.repayment, voluntaryStart: { kind: 'afterGraduation', months: 0 } } })); });
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.errors.map(e => e.path)).toEqual(['settings.graceMonths']);
+    if (!outcome.ok) expect(outcome.errors.map(e => e.path)).toContain('repayment.voluntaryStart.months');
   });
 
   it('a loan edit is rejected at the loan disbursement field', () => {
@@ -235,7 +240,7 @@ describe('disbursement after repayment start is attributed to the edited field (
     let outcome!: ReturnType<typeof result.current.updatePlan>;
     act(() => { outcome = result.current.updatePlan(withLoan('2031-01-01')); });
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.errors.map(e => e.path)).toEqual(['loans.l1.disbursementDate']);
+    if (!outcome.ok) expect(outcome.errors.map(e => e.path)).toContain('loans.l1.disbursementDate');
   });
 });
 

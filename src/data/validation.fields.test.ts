@@ -129,9 +129,10 @@ describe('dates (US-101)', () => {
 
 describe('numbers (US-102, US-201, US-401)', () => {
   it.each([
-    ['grace -1', (p: PlannerPlan) => { p.settings.graceMonths = -1; }, 'settings.graceMonths'],
-    ['grace 2.5', (p: PlannerPlan) => { p.settings.graceMonths = 2.5; }, 'settings.graceMonths'],
-    ['grace as text', (p: PlannerPlan) => { (p.settings as any).graceMonths = '6'; }, 'settings.graceMonths'],
+    ['voluntary start -1', (p: PlannerPlan) => { p.repayment.voluntaryStart = { kind: 'afterGraduation', months: -1 }; }, 'repayment.voluntaryStart.months'],
+    ['voluntary start 2.5', (p: PlannerPlan) => { p.repayment.voluntaryStart = { kind: 'afterGraduation', months: 2.5 }; }, 'repayment.voluntaryStart.months'],
+    ['voluntary start as text', (p: PlannerPlan) => { (p.repayment as any).voluntaryStart = { kind: 'afterGraduation', months: '6' }; }, 'repayment.voluntaryStart.months'],
+    ['loan grace -1', (p: PlannerPlan) => { p.loans[0].requiredPayment = { graceMonths: -1 }; }, 'loans.loan-a.requiredPayment.graceMonths'],
     ['negative money', (p: PlannerPlan) => { p.loans[0].principal = '-1.00'; }, 'loans.loan-a.principal'],
     ['money as a JS number', (p: PlannerPlan) => { (p.loans[0] as any).principal = 100; }, 'loans.loan-a.principal'],
     ['NaN money', (p: PlannerPlan) => { p.loans[0].principal = 'NaN'; }, 'loans.loan-a.principal'],
@@ -149,14 +150,20 @@ describe('numbers (US-102, US-201, US-401)', () => {
     expect(paths(plan)).toContain(path);
   });
 
-  it('accepts the boundaries 0 and 30% for rates, 0 and 12 for grace, and the money cap', () => {
+  it('accepts the boundaries 0 and 30% for rates, 0 and 60 for the voluntary start and loan grace, and the money cap', () => {
     const plan = planWithRecords();
     plan.loans[0].annualRate = '0';
     plan.loans[1].annualRate = '0.30';
-    plan.settings.graceMonths = 12;
+    plan.repayment.voluntaryStart = { kind: 'afterGraduation', months: 60 };
     plan.loans[0].principal = '1000000000.00';
     expect(validatePlannerPlan(plan).ok).toBe(true);
-    plan.settings.graceMonths = 0;
+    plan.repayment.voluntaryStart = { kind: 'afterGraduation', months: 0 };
+    expect(validatePlannerPlan(plan).ok).toBe(true);
+    plan.loans[0].requiredPayment = { graceMonths: 60 };
+    expect(validatePlannerPlan(plan).ok).toBe(true);
+    plan.repayment.payoffTarget = { mode: 'target', kind: 'duration', months: 1 };
+    expect(validatePlannerPlan(plan).ok).toBe(true);
+    plan.repayment.payoffTarget = { mode: 'target', kind: 'duration', months: 1200 };
     expect(validatePlannerPlan(plan).ok).toBe(true);
   });
 });
@@ -174,9 +181,9 @@ describe('scenario override integrity', () => {
     ['a non-overridable field', 'settings.currency', 'USD', /cannot change/],
     ['a record name', 'loans.loan-a.name', 'Renamed', /cannot change/],
     ['an id', 'loans.loan-a.id', 'x', /cannot change/],
-    ['a number field with text', 'settings.graceMonths', '3', /wrong kind/],
+    ['a number field with text', 'repayment.voluntaryStart.months', '3', /wrong kind/],
     ['a rate above 30%', 'loans.loan-a.annualRate', '0.5', /or less/],
-    ['grace above 12', 'settings.graceMonths', 13, /whole number/],
+    ['a voluntary start above 60 months', 'repayment.voluntaryStart.months', 61, /whole number/],
     ['an impossible date', 'loans.loan-a.disbursementDate', '2026-02-30', /valid date/],
     ['an unknown strategy', 'repayment.strategyId', 'input-order', /Choose one of/],
   ])('rejects an override of %s at the override path', (_name, key, value, message) => {
@@ -193,7 +200,7 @@ describe('scenario override integrity', () => {
     const plan = planWithRecords();
     const yearId = plan.schoolYears[0].id;
     plan.scenarios = [{ id: 's1', name: 'S', overrides: {
-      'settings.graceMonths': 0,
+      'repayment.voluntaryStart.months': 0,
       'repayment.strategyId': 'snowball',
       'loans.loan-a.annualRate': '0.3',
       'loans.loan-a.termMonths': 240,
@@ -269,24 +276,38 @@ describe('disbursement after repayment start (review M1)', () => {
     expect(validatePlannerPlan(plan).ok).toBe(true);
   });
 
-  it('follows grace: grace 0 moves repayment start to graduation', () => {
+  it('follows the loan\'s own terms (US-507): a private loan with 0 months grace starts repayment at graduation', () => {
     const plan = planWithRecords();
     plan.loans[0].disbursementDate = '2030-06-01';
     expect(validatePlannerPlan(plan).ok).toBe(true);
-    plan.settings.graceMonths = 0;
+    plan.loans[0] = { ...plan.loans[0], type: 'private', requiredPayment: { graceMonths: 0 } };
     expect(paths(plan)).toEqual(['loans.loan-a.disbursementDate']);
+    // A private loan without configured terms has no estimated required date, so nothing is checked.
+    plan.loans[0] = { ...plan.loans[0], requiredPayment: undefined };
+    delete plan.loans[0].requiredPayment;
+    expect(validatePlannerPlan(plan).ok).toBe(true);
+  });
+
+  it('rejects voluntary payments that start before the earliest disbursement', () => {
+    const plan = planWithRecords();
+    plan.repayment.voluntaryStart = { kind: 'date', date: '2026-08-01' };
+    expect(paths(plan)).toEqual(['repayment.voluntaryStart.date']);
+    plan.repayment.voluntaryStart = { kind: 'date', date: plan.loans.map(l => l.disbursementDate).sort()[0] };
+    expect(validatePlannerPlan(plan).ok).toBe(true);
   });
 
   it('in a scenario, a graduation or grace override that causes it is reported at that override', () => {
     const plan = planWithRecords();
     plan.loans[0].disbursementDate = '2030-06-01';
-    plan.scenarios = [{ id: 's1', name: 'Early', overrides: { 'settings.graceMonths': 0 } }];
+    plan.loans[0].requiredPayment = { firstDueDate: '2030-12-20' };
+    plan.scenarios = [{ id: 's1', name: 'Early', overrides: { 'loans.loan-a.requiredPayment.firstDueDate': '2030-06-20' } }];
     const result = validatePlannerPlan(plan);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors.map(e => e.path)).toEqual(['scenarios.s1.overrides.settings.graceMonths']);
+    expect(result.errors.map(e => e.path)).toEqual(['scenarios.s1.overrides.loans.loan-a.requiredPayment.firstDueDate']);
     expect(result.errors[0].message).toMatch(/Direct.*2030-06-01/);
 
+    delete plan.loans[0].requiredPayment; // the federal default follows graduation
     plan.scenarios = [{ id: 's1', name: 'Early', overrides: { 'settings.graduationDate': '2029-05-20' } }];
     expect(paths(plan)).toContain('scenarios.s1.overrides.settings.graduationDate');
   });

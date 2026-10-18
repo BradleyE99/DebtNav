@@ -2,6 +2,10 @@
 import type {
   CostItem, LifeEvent, PlannerLoan, PlannerPlan, PlannerYear, Resource, Scenario,
 } from '../engine/planner-contracts';
+import { fieldIdForPath } from '../data/readiness';
+
+/** Engine error path → UI field id; lives in the shared readiness layer (re-exported for existing callers). */
+export { fieldIdForPath };
 
 export function updateYear(plan: PlannerPlan, yearId: string, edit: (year: PlannerYear) => PlannerYear): PlannerPlan {
   return { ...plan, schoolYears: plan.schoolYears.map(year => (year.id === yearId ? edit(year) : year)) };
@@ -69,20 +73,6 @@ export function yearHasData(plan: PlannerPlan, year: PlannerYear): boolean {
   return year.costItems.length > 0 || year.resources.length > 0
     || plan.loans.some(loan => loan.schoolYearId === year.id)
     || plan.lifeEvents.some(event => event.schoolYearId === year.id);
-}
-
-/**
- * Converts an engine error path to the UI field id (record-id path). Accepts both id paths
- * ('loans.<id>.disbursementDate') and legacy index paths ('loans.0.disbursementDate').
- */
-export function fieldIdForPath(plan: PlannerPlan, path: string): string {
-  const match = /^loans\.(\d+)\.(.+)$/.exec(path);
-  // A loan whose id is all digits is addressed by id, never by index.
-  if (match && !plan.loans.some(loan => loan.id === match[1])) {
-    const loan = plan.loans[Number(match[1])];
-    if (loan) return `loans.${loan.id}.${match[2]}`;
-  }
-  return path;
 }
 
 /** Engine errors that belong to one loan's fields. */

@@ -1,22 +1,27 @@
 /**
- * Schema v3 validation for persisted and edited plans.
+ * Schema v4 validation for persisted and edited plans.
  *
  * - Never throws, whatever the input (NFR-11): every check is defensive and the whole run is
  *   wrapped in a try/catch that converts unexpected failures into a field error.
  * - FieldError.path uses the contract's field-path format (record IDs, never array indexes), so the
  *   UI can show each message next to the input with the same id.
  * - Validation guarantees the engine can project the plan: besides structure it rejects a loan
- *   disbursed after repayment starts (graduation + grace), at 'loans.<id>.disbursementDate'.
- *   usePlannerDocument re-attributes that error to the settings field when a date/grace edit causes
- *   it; scenario checks attribute it to the responsible override. Softer planning problems are
- *   reported by the projection and never block an edit.
+ *   disbursed after its own repayment period starts (US-507: federal default graduation + 6 months,
+ *   an actual first due date, or the private loan's terms), at 'loans.<id>.disbursementDate', and a
+ *   voluntary start before the earliest disbursement, at 'repayment.voluntaryStart.months|date'.
+ *   usePlannerDocument re-attributes the disbursement error to the settings field when a date edit
+ *   causes it; scenario checks attribute it to the responsible override. Softer planning problems
+ *   (for example missed required payments) are reported by the projection and never block an edit.
  */
 import { D } from '../engine/money';
 import { addMonths, validDate } from '../engine/dates';
+import { loanPaymentTiming, voluntaryStartDate } from '../engine/paymentTiming';
+import { FEDERAL_GRACE_MONTHS, SIMULATION_CAP_MONTHS } from '../engine/planner-contracts';
 import { applyScenario } from '../engine/planner';
+import { UNASSIGNED_ACADEMIC_YEAR, isAcademicYear } from '../engine/academicYear';
 import { isResolvablePath, overridablePaths } from '../engine/paths';
 import { listStrategies } from '../engine/strategies/registry';
-import type { FieldError, PlannerDocument, PlannerPlan, Result } from '../engine/planner-contracts';
+import type { FieldError, PayoffTarget, PlannerDocument, PlannerPlan, Result } from '../engine/planner-contracts';
 
 type Code = FieldError['code'];
 type Obj = Record<string, unknown>;
@@ -28,9 +33,13 @@ export const LIMITS = {
   weeksWorked: '53',
   percent: '100',
   rate: '0.3',
-  graceMonths: { min: 0, max: 12 },
+  /** US-507: private/other loan grace before the first required payment period. */
+  loanGraceMonths: { min: 0, max: 60 },
+  /** US-507: voluntary payments start this many months after graduation. */
+  voluntaryStartMonths: { min: 0, max: 60 },
+  /** US-506: "pay off within N months" target. */
+  payoffTargetMonths: { min: 1, max: 1200 },
   termMonths: { min: 1, max: 1200 },
-  horizonMonths: { min: 1, max: 1200 },
   familySize: { min: 1, max: 20 },
   schoolYears: 50,
   schoolSpanYears: 50,
@@ -204,7 +213,6 @@ function validateSettings(plan: Obj, check: Checker): { start?: string; graduati
   const settings = check.object(plan.settings, 'settings');
   const startOk = check.date(settings.startDate, 'settings.startDate');
   const graduationOk = check.date(settings.graduationDate, 'settings.graduationDate');
-  check.integer(settings.graceMonths, 'settings.graceMonths', LIMITS.graceMonths);
   check.choice(settings.currency, 'settings.currency', ['USD']);
   if (!startOk || !graduationOk) return {};
   const start = settings.startDate as string;
@@ -292,6 +300,18 @@ function validateLoans(plan: Obj, check: Checker, yearIds: Set<string>): Set<str
     if (loan.schoolYearId !== undefined && (typeof loan.schoolYearId !== 'string' || !yearIds.has(loan.schoolYearId))) {
       check.fail(`${path}.schoolYearId`, 'OUT_OF_RANGE', 'This loan points to a school year that no longer exists.');
     }
+    if (loan.academicYear !== undefined && loan.academicYear !== UNASSIGNED_ACADEMIC_YEAR && !isAcademicYear(loan.academicYear)) {
+      check.fail(`${path}.academicYear`, 'OUT_OF_RANGE', 'Choose an academic year such as 2026–2027, or Unassigned.');
+    }
+    if (loan.requiredPayment !== undefined) {
+      const terms = check.object(loan.requiredPayment, `${path}.requiredPayment`);
+      const dueOk = check.date(terms.firstDueDate, `${path}.requiredPayment.firstDueDate`, true);
+      check.integer(terms.graceMonths, `${path}.requiredPayment.graceMonths`, LIMITS.loanGraceMonths, true);
+      check.bool(terms.inSchoolPayments, `${path}.requiredPayment.inSchoolPayments`, true);
+      if (dueOk && validDate(loan.disbursementDate) && (terms.firstDueDate as string) <= (loan.disbursementDate as string)) {
+        check.fail(`${path}.requiredPayment.firstDueDate`, 'OUT_OF_RANGE', 'The first payment due date must be after the disbursement date.');
+      }
+    }
   }
   return ids;
 }
@@ -300,7 +320,18 @@ function validateRepayment(plan: Obj, check: Checker, loanIds: Set<string>): voi
   const repayment = check.object(plan.repayment, 'repayment');
   check.choice(repayment.strategyId, 'repayment.strategyId', strategyIds(), 'UNKNOWN_STRATEGY');
   check.money(repayment.extraMonthlyPayment, 'repayment.extraMonthlyPayment');
-  check.integer(repayment.maxMonths, 'repayment.maxMonths', LIMITS.horizonMonths, true);
+  const target = check.object(repayment.payoffTarget, 'repayment.payoffTarget');
+  if (target.mode === 'target') {
+    check.choice(target.kind, 'repayment.payoffTarget.kind', ['date', 'duration']);
+    if (target.kind === 'date') check.date(target.date, 'repayment.payoffTarget.date');
+    if (target.kind === 'duration') check.integer(target.months, 'repayment.payoffTarget.months', LIMITS.payoffTargetMonths);
+  } else {
+    check.choice(target.mode, 'repayment.payoffTarget.mode', ['budget', 'target']);
+  }
+  const start = check.object(repayment.voluntaryStart, 'repayment.voluntaryStart');
+  check.choice(start.kind, 'repayment.voluntaryStart.kind', ['afterGraduation', 'date']);
+  if (start.kind === 'afterGraduation') check.integer(start.months, 'repayment.voluntaryStart.months', LIMITS.voluntaryStartMonths);
+  if (start.kind === 'date') check.date(start.date, 'repayment.voluntaryStart.date');
   check.choice(repayment.mode, 'repayment.mode', ['standard', 'federal']);
   check.choice(repayment.federalPlan, 'repayment.federalPlan', ['ibr', 'rap']);
   check.integer(repayment.familySize, 'repayment.familySize', LIMITS.familySize);
@@ -321,6 +352,8 @@ function validatePeople(plan: Obj, check: Checker): void {
   check.money(income.annualSalary, 'postGradIncome.annualSalary');
   check.money(income.monthlyDebtBudget, 'postGradIncome.monthlyDebtBudget');
   check.percent(income.raiseAllocationPercent, 'postGradIncome.raiseAllocationPercent');
+  check.money(income.monthlyTakeHome, 'postGradIncome.monthlyTakeHome', true);
+  check.money(income.monthlyExpenses, 'postGradIncome.monthlyExpenses', true);
 
   const borrower = check.object(plan.borrower, 'borrower');
   check.choice(borrower.dependency, 'borrower.dependency', ['dependent', 'independent']);
@@ -388,9 +421,12 @@ function lookup(plan: unknown, path: string): unknown {
  * resource from fixed to hourly) does not invalidate an existing override.
  */
 const OVERRIDABLE_SHAPES = new Set([
-  'settings.startDate', 'settings.graduationDate', 'settings.graceMonths',
+  'settings.startDate', 'settings.graduationDate',
   'postGradIncome.annualSalary', 'postGradIncome.monthlyDebtBudget',
   'repayment.extraMonthlyPayment', 'repayment.strategyId',
+  'repayment.voluntaryStart.months', 'repayment.voluntaryStart.date',
+  'repayment.payoffTarget.date', 'repayment.payoffTarget.months',
+  'loans.*.requiredPayment.firstDueDate', 'loans.*.requiredPayment.graceMonths',
   'schoolYears.*.bufferPercent', 'schoolYears.*.costItems.*.amount',
   'schoolYears.*.resources.*.amount', 'schoolYears.*.resources.*.hourlyWage', 'schoolYears.*.resources.*.unavailablePercent',
   'loans.*.principal', 'loans.*.annualRate', 'loans.*.termMonths', 'loans.*.disbursementDate',
@@ -448,10 +484,11 @@ function validateScenarioEffects(plan: PlannerPlan, check: Checker): void {
         check.fail(`${prefix}.${error.path}`, error.code, error.message);
         continue;
       }
-      // The loan's own date is not overridden, so a date or grace override caused this.
-      const cause = ['settings.graduationDate', 'settings.graceMonths'].find(key => Object.hasOwn(scenario.overrides, key));
-      const loan = plan.loans.find(entry => entry.id === loanId);
-      const start = repaymentStartDate(effective.settings);
+      // The loan's own date is not overridden, so a date or required-payment override caused this.
+      const cause = ['settings.graduationDate', `loans.${loanId}.requiredPayment.firstDueDate`, `loans.${loanId}.requiredPayment.graceMonths`]
+        .find(key => Object.hasOwn(scenario.overrides, key));
+      const loan = effective.loans.find(entry => entry.id === loanId);
+      const start = loan ? loanPaymentTiming(effective, loan).repaymentPeriodStart : null;
       check.fail(
         `${prefix}.${cause ?? error.path}`,
         error.code,
@@ -461,12 +498,20 @@ function validateScenarioEffects(plan: PlannerPlan, check: Checker): void {
   }
 }
 
-export const repaymentStartDate = (settings: PlannerPlan['settings']): string => addMonths(settings.graduationDate, settings.graceMonths);
+/**
+ * Federal default repayment-period start (graduation + 6 months, 34 CFR 685.207). Kept for callers of
+ * the v3 API; `graceMonths` is honored only for legacy v3 settings objects. Per-loan starts come from
+ * engine/paymentTiming.ts loanPaymentTiming.
+ */
+export const repaymentStartDate = (settings: { graduationDate: string; graceMonths?: number }): string =>
+  addMonths(settings.graduationDate, typeof settings.graceMonths === 'number' ? settings.graceMonths : FEDERAL_GRACE_MONTHS);
+const VOLUNTARY_START_MESSAGE = 'Payments cannot start before your first loan is disbursed';
 const disbursementMessage = (start: string): string => `Disbursement must be on or before repayment start (${start}).`;
 /** True for the disbursement-after-repayment-start rule (base loan field or scenario attribution). */
 export function isDisbursementError(error: FieldError): boolean {
   return error.code === 'OUT_OF_RANGE'
-    && (error.message.startsWith('Disbursement must be on or before repayment start') || error.message.startsWith('In this scenario repayment would start'));
+    && (error.message.startsWith('Disbursement must be on or before repayment start') || error.message.startsWith('In this scenario repayment would start')
+      || error.message.startsWith(VOLUNTARY_START_MESSAGE));
 }
 export const DISBURSEMENT_PATH = /^loans\.([A-Za-z0-9_-]+)\.disbursementDate$/;
 
@@ -489,18 +534,24 @@ function runValidation(value: unknown, includeScenarios: boolean): FieldError[] 
     validateScenarioShapes(value, check);
 
     if (check.errors.length === 0 && dates.graduation) {
+      const plan = value as unknown as PlannerPlan;
       // Keep every derived repayment date inside the supported calendar (years 0001–9999).
-      const settings = value.settings as PlannerPlan['settings'];
-      const horizon = (value.repayment as Obj).maxMonths;
-      const start = addMonths(settings.graduationDate, settings.graceMonths);
-      const end = validDate(start) ? addMonths(start, (typeof horizon === 'number' ? horizon : 600) + 1) : '';
+      const start = voluntaryStartDate(plan);
+      const end = validDate(start) ? addMonths(start, SIMULATION_CAP_MONTHS + 1) : '';
+      const startPath = plan.repayment.voluntaryStart.kind === 'date' ? 'repayment.voluntaryStart.date' : 'repayment.voluntaryStart.months';
       if (!validDate(start) || !validDate(end)) {
-        check.fail('settings.graduationDate', 'OUT_OF_RANGE', 'Repayment would extend past the year 9999. Choose an earlier date.');
+        check.fail(startPath, 'OUT_OF_RANGE', 'Repayment would extend past the year 9999. Choose an earlier date.');
       } else {
-        // The engine cannot project a loan disbursed after repayment starts.
-        for (const loan of value.loans as PlannerPlan['loans']) {
-          if (loan.disbursementDate > start) {
-            check.fail(`loans.${loan.id}.disbursementDate`, 'OUT_OF_RANGE', disbursementMessage(start));
+        // US-507: payments cannot start before any money is borrowed.
+        const earliest = plan.loans.reduce<string | null>((min, loan) => (min === null || loan.disbursementDate < min ? loan.disbursementDate : min), null);
+        if (earliest !== null && start < earliest) {
+          check.fail(startPath, 'OUT_OF_RANGE', `${VOLUNTARY_START_MESSAGE} (${earliest}).`);
+        }
+        // The engine cannot project a loan disbursed after its own repayment period starts.
+        for (const loan of plan.loans) {
+          const loanStart = loanPaymentTiming(plan, loan).repaymentPeriodStart;
+          if (loanStart !== null && loan.disbursementDate > loanStart) {
+            check.fail(`loans.${loan.id}.disbursementDate`, 'OUT_OF_RANGE', disbursementMessage(loanStart));
           }
         }
       }
@@ -525,14 +576,19 @@ function pick<T extends object, K extends keyof T>(source: T, keys: readonly K[]
   return out;
 }
 
+function persistedPayoffTarget(target: PayoffTarget): PayoffTarget {
+  if (target.mode === 'budget') return { mode: 'budget' };
+  return target.kind === 'date' ? { mode: 'target', kind: 'date', date: target.date } : { mode: 'target', kind: 'duration', months: target.months };
+}
+
 /**
- * A deep copy of a validated plan containing only plan inputs defined by schema v3. Anything else
+ * A deep copy of a validated plan containing only plan inputs defined by schema v4. Anything else
  * (derived projections, UI drafts, unknown keys from other tools) is dropped, so storage and export
  * hold exactly the user's inputs.
  */
 export function toPersistedPlan(plan: PlannerPlan): PlannerPlan {
   return {
-    settings: pick(plan.settings, ['startDate', 'graduationDate', 'graceMonths', 'currency']),
+    settings: pick(plan.settings, ['startDate', 'graduationDate', 'currency']),
     schoolYears: plan.schoolYears.map(year => ({
       ...pick(year, ['id', 'startDate', 'endDate', 'bufferPercent']),
       costItems: year.costItems.map(item => pick(item, ['id', 'category', 'label', 'amount', 'semester'])),
@@ -542,13 +598,20 @@ export function toPersistedPlan(plan: PlannerPlan): PlannerPlan {
     })),
     loans: plan.loans.map(loan => pick(loan, [
       'id', 'name', 'type', 'principal', 'annualRate', 'disbursementDate', 'termMonths', 'payInterestWhileInSchool',
-      'accruesInterestInSchool', 'monthlyPayment', 'schoolYearId', 'gapAtCreation', 'capitalizeInterest',
-    ])),
+      'accruesInterestInSchool', 'monthlyPayment', 'schoolYearId', 'academicYear', 'gapAtCreation', 'capitalizeInterest',
+    ])).map((picked, index) => {
+      const terms = plan.loans[index].requiredPayment;
+      return terms === undefined ? picked : { ...picked, requiredPayment: pick(terms, ['firstDueDate', 'graceMonths', 'inSchoolPayments']) };
+    }),
     repayment: {
-      ...pick(plan.repayment, ['strategyId', 'extraMonthlyPayment', 'maxMonths', 'mode', 'federalPlan', 'familySize', 'annualAGI']),
+      ...pick(plan.repayment, ['strategyId', 'extraMonthlyPayment', 'mode', 'federalPlan', 'familySize', 'annualAGI']),
       customOrder: [...plan.repayment.customOrder],
+      payoffTarget: persistedPayoffTarget(plan.repayment.payoffTarget),
+      voluntaryStart: plan.repayment.voluntaryStart.kind === 'date'
+        ? { kind: 'date', date: plan.repayment.voluntaryStart.date }
+        : { kind: 'afterGraduation', months: plan.repayment.voluntaryStart.months },
     },
-    postGradIncome: pick(plan.postGradIncome, ['annualSalary', 'monthlyDebtBudget', 'raiseAllocationPercent']),
+    postGradIncome: pick(plan.postGradIncome, ['annualSalary', 'monthlyDebtBudget', 'raiseAllocationPercent', 'monthlyTakeHome', 'monthlyExpenses']),
     lifeEvents: plan.lifeEvents.map(event => pick(event, [
       'id', 'name', 'date', 'type', 'amount', 'allocationPercent', 'schoolYearId', 'recurrence', 'recurrenceEndDate',
     ])),
@@ -561,7 +624,7 @@ export function toPersistedPlan(plan: PlannerPlan): PlannerPlan {
   } as PlannerPlan;
 }
 
-/** Validates a v3 document and returns a normalized copy containing only persisted fields. */
+/** Validates a v4 document and returns a normalized copy containing only persisted fields. */
 export function validateDocument(value: unknown): Result<PlannerDocument> {
   try {
     if (!isPlainObject(value)) return { ok: false, errors: [{ path: 'document', code: 'REQUIRED', message: 'Expected a DebtNav plan document.' }] };

@@ -37,12 +37,12 @@ function v2Envelope(document: PlannerDocument, extra: Record<string, unknown> = 
 }
 
 describe('saving and loading', () => {
-  it('saves a v3 envelope and reloads the same document', () => {
+  it('saves a v4 envelope and reloads the same document', () => {
     const storage = memory();
     const document = doc();
     expect(saveDocument(document, storage)).toEqual({ ok: true, notice: null });
     const envelope = JSON.parse(storage.data.get(STORAGE_KEY)!);
-    expect(envelope).toMatchObject({ app: 'debtnav', schemaVersion: 3 });
+    expect(envelope).toMatchObject({ app: 'debtnav', schemaVersion: 4 });
     expect(Number.isFinite(Date.parse(envelope.savedAt))).toBe(true);
     expect(loadDocument(storage)).toEqual({ document, notice: null, preservedUnreadable: false, repairs: [] });
   });
@@ -115,7 +115,7 @@ describe('export and import', () => {
 
   it('serializeDocument reports invalid plans instead of throwing', () => {
     const document = doc();
-    document.plan.settings.graceMonths = 99;
+    document.plan.repayment.voluntaryStart = { kind: 'afterGraduation', months: 99 };
     const result = serializeDocument(document);
     expect(result.ok).toBe(false);
     expect(() => exportDocument(document)).toThrow(/invalid/);
@@ -125,9 +125,10 @@ describe('export and import', () => {
     ['invalid JSON', '{', /not valid JSON/],
     ['an empty object', '{}', /schema version/],
     ['schema 1', '{"schemaVersion":1}', /old format/],
-    ['a future version', '{"app":"debtnav","schemaVersion":4,"savedAt":"x","document":{}}', /newer version/],
+    ['a future version', '{"app":"debtnav","schemaVersion":5,"savedAt":"x","document":{}}', /newer version/],
     ['another app', '{"app":"other","schemaVersion":3,"document":{}}', /not created by DebtNav/],
     ['v3 without app', '{"schemaVersion":3,"document":{}}', /not created by DebtNav/],
+    ['v4 without app', '{"schemaVersion":4,"document":{}}', /not created by DebtNav/],
     ['an oversized file', ' '.repeat(MAX_JSON_LENGTH + 1), /5 MB/],
     ['no document', '{"app":"debtnav","schemaVersion":3}', /does not contain/],
   ])('rejects %s with a clear message', (_name, text, message) => {

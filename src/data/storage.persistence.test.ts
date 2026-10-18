@@ -34,12 +34,17 @@ function richPlan(): PlannerPlan {
   year.resources.push({ id: 'job', type: 'job', label: 'Café ☕', amount: '0.00', incomeMode: 'hourly', hourlyWage: '15.00', hoursPerWeek: '15', weeksWorked: '30', unavailablePercent: '40' });
   plan.loans.push({
     id: 'loan-a', name: 'Direct Unsub', type: 'unsubsidized', principal: '5500.00', annualRate: '0.0653', disbursementDate: year.startDate,
-    termMonths: 120, schoolYearId: year.id, gapAtCreation: '5500.00', capitalizeInterest: false, monthlyPayment: '75.00', payInterestWhileInSchool: true,
+    termMonths: 120, schoolYearId: year.id, academicYear: '2026-2027', gapAtCreation: '5500.00', capitalizeInterest: false, monthlyPayment: '75.00', payInterestWhileInSchool: true,
   });
-  plan.loans.push({ id: 'loan-b', name: 'Private', type: 'private', principal: '2000.00', annualRate: '0.09', disbursementDate: year.startDate, termMonths: 120, accruesInterestInSchool: false });
-  plan.repayment = { ...plan.repayment, strategyId: 'custom', customOrder: ['loan-b', 'loan-a'], mode: 'federal', federalPlan: 'ibr', familySize: 3, maxMonths: 480 };
+  plan.loans[0].requiredPayment = { firstDueDate: '2030-12-15' };
+  plan.loans.push({ id: 'loan-b', name: 'Private', type: 'private', principal: '2000.00', annualRate: '0.09', disbursementDate: year.startDate, termMonths: 120, accruesInterestInSchool: false, academicYear: '2024-2025', requiredPayment: { graceMonths: 3, inSchoolPayments: false } });
+  plan.repayment = {
+    ...plan.repayment, strategyId: 'custom', customOrder: ['loan-b', 'loan-a'], mode: 'federal', federalPlan: 'ibr', familySize: 3,
+    payoffTarget: { mode: 'target', kind: 'duration', months: 84 }, voluntaryStart: { kind: 'afterGraduation', months: 2 },
+  };
+  plan.postGradIncome = { ...plan.postGradIncome, monthlyTakeHome: '3800.00', monthlyExpenses: '2600.50' };
   plan.lifeEvents.push({ id: 'bonus', name: 'Bonus', date: '2031-06-01', type: 'windfall', amount: '1000.00', allocationPercent: '50', recurrence: 'yearly', recurrenceEndDate: '2035-06-01' });
-  plan.scenarios.push({ id: 's1', name: 'Higher salary', overrides: { 'postGradIncome.annualSalary': '70000.00', 'settings.graceMonths': 0 } });
+  plan.scenarios.push({ id: 's1', name: 'Higher salary', overrides: { 'postGradIncome.annualSalary': '70000.00', 'repayment.voluntaryStart.months': 0 } });
   plan.borrower = { dependency: 'independent', level: 'graduate', priorFederalDebt: '1200.50' };
   return plan;
 }
@@ -62,7 +67,7 @@ describe('export → import round trip (US-1002)', () => {
     (plan.loans[0] as unknown as Record<string, unknown>).balanceAtRepaymentStart = '6000.00';
     const envelope = JSON.parse(exportDocument({ plan, disclaimerDismissed: false }));
     expect(Object.keys(envelope).sort()).toEqual(['app', 'document', 'savedAt', 'schemaVersion']);
-    expect(envelope).toMatchObject({ app: 'debtnav', schemaVersion: 3 });
+    expect(envelope).toMatchObject({ app: 'debtnav', schemaVersion: 4 });
     expect(Object.keys(envelope.document).sort()).toEqual(['disclaimerDismissed', 'plan']);
     expect(Object.keys(envelope.document.plan).sort()).toEqual(
       ['borrower', 'lifeEvents', 'loans', 'postGradIncome', 'repayment', 'scenarios', 'schoolYears', 'settings'],
@@ -92,7 +97,7 @@ describe('import never corrupts (US-1002)', () => {
   const current = exportDocument({ plan: richPlan(), disclaimerDismissed: true });
 
   it.each([
-    ['future version', JSON.stringify({ app: 'debtnav', schemaVersion: 4, savedAt: '', document: { plan: richPlan(), disclaimerDismissed: true } }), /newer version/],
+    ['future version', JSON.stringify({ app: 'debtnav', schemaVersion: 5, savedAt: '', document: { plan: richPlan(), disclaimerDismissed: true } }), /newer version/],
     ['fractional version', '{"app":"debtnav","schemaVersion":2.5,"document":{}}', /schema version/],
     ['string version', '{"app":"debtnav","schemaVersion":"3","document":{}}', /schema version/],
     ['an array', '[1,2,3]', /not a DebtNav/],
@@ -124,7 +129,7 @@ describe('import never corrupts (US-1002)', () => {
     if (!result.ok) return;
     expect(result.value.plan.repayment.strategyId).toBe('avalanche');
     expect(result.value.plan.repayment.customOrder).toEqual(['loan-b', 'loan-a']);
-    expect(result.value.plan.scenarios[0].overrides).toEqual({ 'postGradIncome.annualSalary': '70000.00', 'settings.graceMonths': 0 });
+    expect(result.value.plan.scenarios[0].overrides).toEqual({ 'postGradIncome.annualSalary': '70000.00', 'repayment.voluntaryStart.months': 0 });
     expect(result.value).not.toHaveProperty('drafts');
   });
 });
@@ -209,8 +214,11 @@ describe('deleting (US-1003)', () => {
 
 describe('repairing loans disbursed after repayment start (older dev builds)', () => {
   /** A v3 envelope written without validation, as an earlier build could have. */
-  const legacyEnvelope = (mutate: (plan: PlannerPlan) => void, version = 3): string => {
-    const plan = createDefaultPlan();
+  type V3Plan = Omit<PlannerPlan, 'settings'> & { settings: PlannerPlan['settings'] & { graceMonths: number } };
+  const legacyEnvelope = (mutate: (plan: V3Plan) => void, version = 3): string => {
+    const { payoffTarget: _target, voluntaryStart: _start, ...repayment } = createDefaultPlan().repayment;
+    const base = createDefaultPlan();
+    const plan = { ...base, settings: { ...base.settings, graceMonths: 6 }, repayment: { ...repayment, maxMonths: 360 } } as unknown as V3Plan;
     plan.loans.push({ id: 'spring', name: 'Spring loan', type: 'private', principal: '1000.00', annualRate: '0.05', disbursementDate: '2031-01-10', termMonths: 120 });
     mutate(plan);
     return JSON.stringify({ app: 'debtnav', schemaVersion: version, savedAt: '2026-01-01T00:00:00.000Z', document: { plan, disclaimerDismissed: true } });
@@ -274,7 +282,8 @@ describe('repairing loans disbursed after repayment start (older dev builds)', (
   });
 
   it('import: other errors are still rejected (nothing is repaired)', () => {
-    const { result, repairs } = importDocumentDetailed(legacyEnvelope(plan => { plan.settings.graceMonths = 13; }));
+    // v4 accepts voluntary starts and loan grace of 0–60 months; 61 is out of range after migration.
+    const { result, repairs } = importDocumentDetailed(legacyEnvelope(plan => { plan.settings.graceMonths = 61; }));
     expect(result.ok).toBe(false);
     expect(repairs).toEqual([]);
   });

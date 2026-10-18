@@ -7,6 +7,6 @@ const scope = self as unknown as {
 };
 
 scope.onmessage = event => {
-  const { id, plan } = event.data;
-  scope.postMessage({ id, result: computeSecondary(plan) });
+  const { id, plan, today } = event.data;
+  scope.postMessage({ id, result: computeSecondary(plan, today) });
 };

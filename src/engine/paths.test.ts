@@ -25,7 +25,8 @@ function samplePlan(): PlannerPlan {
 describe('path resolution', () => {
   it('reads leaves through record ids and rejects unsafe, dangling, id and scenario paths', () => {
     const plan = samplePlan();
-    expect(getPathValue(plan, 'settings.graceMonths')).toBe(6);
+    expect(getPathValue(plan, 'repayment.voluntaryStart.months')).toBe(6);
+    expect(getPathValue(plan, 'settings.graceMonths')).toBeUndefined(); // removed in schema v4
     expect(getPathValue(plan, 'loans.a.principal')).toBe('5000.00');
     expect(getPathValue(plan, 'schoolYears.year-1.costItems.tuition.amount')).toBe('12000.00');
     for (const path of ['', 'loans.missing.principal', 'loans.a.id', 'scenarios.s.name', '__proto__.x', 'loans.a.constructor', 'settings..x', 'settings', 'loans.a.nope', 'x'.repeat(501)]) {
@@ -36,7 +37,7 @@ describe('path resolution', () => {
     // Optional leaves may be overridden even when the base omits them.
     expect(isResolvablePath(plan, 'loans.a.monthlyPayment')).toBe(true);
     expect(getPathValue(plan, 'loans.a.monthlyPayment')).toBeUndefined();
-    expect(isResolvablePath(plan, 'repayment.maxMonths')).toBe(true);
+    expect(isResolvablePath(plan, 'repayment.maxMonths')).toBe(false); // removed in schema v4
     expect(isResolvablePath(plan, 'lifeEvents.bonus.recurrence')).toBe(true);
     expect(isResolvablePath(plan, 'settings.maxMonths')).toBe(false);
     // Non-primitive leaves (arrays/objects) are not overridable.
@@ -51,18 +52,18 @@ describe('US-801 overrides store only differences', () => {
     expect(plan.scenarios[0].overrides).toEqual({ 'postGradIncome.monthlyDebtBudget': '500.00' });
     plan = setScenarioOverride(plan, 's', 'postGradIncome.monthlyDebtBudget', '400');
     expect(plan.scenarios[0].overrides).toEqual({});
-    plan = setScenarioOverride(plan, 's', 'settings.graceMonths', 0);
-    expect(plan.scenarios[0].overrides).toEqual({ 'settings.graceMonths': 0 });
-    plan = clearScenarioOverride(plan, 's', 'settings.graceMonths');
+    plan = setScenarioOverride(plan, 's', 'repayment.voluntaryStart.months', 0);
+    expect(plan.scenarios[0].overrides).toEqual({ 'repayment.voluntaryStart.months': 0 });
+    plan = clearScenarioOverride(plan, 's', 'repayment.voluntaryStart.months');
     expect(plan.scenarios[0].overrides).toEqual({});
   });
 
   it('leaves the plan unchanged for unknown scenarios, unsafe paths and non-primitive values', () => {
     const plan = samplePlan();
-    expect(setScenarioOverride(plan, 'missing', 'settings.graceMonths', 1)).toBe(plan);
+    expect(setScenarioOverride(plan, 'missing', 'repayment.voluntaryStart.months', 1)).toBe(plan);
     expect(setScenarioOverride(plan, 's', '__proto__.polluted', 'x')).toBe(plan);
-    expect(setScenarioOverride(plan, 's', 'settings.graceMonths', {} as unknown as string)).toBe(plan);
-    expect(clearScenarioOverride(plan, 'missing', 'settings.graceMonths')).toBe(plan);
+    expect(setScenarioOverride(plan, 's', 'repayment.voluntaryStart.months', {} as unknown as string)).toBe(plan);
+    expect(clearScenarioOverride(plan, 'missing', 'repayment.voluntaryStart.months')).toBe(plan);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 

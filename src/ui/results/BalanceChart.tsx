@@ -1,7 +1,6 @@
 import { useState, type MouseEvent } from 'react';
 import type { Projection } from '../../engine/planner-contracts';
 import { usePlanner } from '../PlannerContext';
-import { projectable } from './comparison';
 import { Explain, TableRegion } from '../common/common';
 import { formatCurrency, strategyName } from '../format';
 
@@ -40,17 +39,13 @@ function niceMax(value: number): number {
 }
 
 export function BalanceChart() {
-  const { plan, projection, comparisons } = usePlanner();
-  const [mode, setMode] = useState<'strategy' | 'scenario'>('strategy');
+  const { projection, comparisons } = usePlanner();
   const [hoverMonth, setHoverMonth] = useState<number | null>(null);
   const baseRepayment = projection?.repayment;
   if (!projection || !baseRepayment || !comparisons) return null;
 
-  const effectiveMode = mode === 'scenario' && plan.scenarios.length === 0 ? 'strategy' : mode;
-  const lines: Line[] = effectiveMode === 'strategy'
-    ? comparisons.strategyComparisons.map(item => ({ key: item.id, name: strategyName(item.id), projection: item.projection }))
-    : [{ key: 'base', name: 'Base plan', projection: baseRepayment },
-      ...comparisons.scenarioComparisons.filter(projectable).map(item => ({ key: item.id, name: item.name, projection: item.projection }))];
+  // Scenarios are not part of the simplified planner: the chart compares payoff strategies only.
+  const lines: Line[] = comparisons.strategyComparisons.map(item => ({ key: item.id, name: strategyName(item.id), projection: item.projection }));
   const charted = lines.slice(0, SERIES.length);
   const months = Math.max(1, ...charted.map(line => line.projection.amortizationSchedule.length));
   const maxBalance = niceMax(Math.max(0, ...charted.flatMap(line => [toNumber(line.projection.balanceAtRepaymentStart), ...line.projection.amortizationSchedule.map(row => toNumber(row.remainingBalance))])));
@@ -73,13 +68,6 @@ export function BalanceChart() {
   return (
     <>
       <h3>Balance over time</h3>
-      {plan.scenarios.length > 0 && (
-        <fieldset className="segmented">
-          <legend>Compare</legend>
-          <label><input type="radio" name="chart-mode" checked={effectiveMode === 'strategy'} onChange={() => setMode('strategy')} /> Payoff strategies</label>
-          <label><input type="radio" name="chart-mode" checked={effectiveMode === 'scenario'} onChange={() => setMode('scenario')} /> Scenarios</label>
-        </fieldset>
-      )}
       <ul className="chart-legend" aria-label="Chart legend">
         {charted.map((line, index) => (
           <li key={line.key}>

@@ -4,6 +4,7 @@
  */
 import type Decimal from 'decimal.js';
 import type { PlannerLoan, PlannerPlan } from '../engine/planner-contracts';
+import { voluntaryStartDate } from '../engine/paymentTiming';
 import { D, cents, money, sum } from '../engine/money';
 import { addMonths, daysBetween, validDate } from '../engine/dates';
 import { loanYearIndex } from '../engine/planner';
@@ -93,7 +94,7 @@ function idrLoans(loans: readonly PlannerLoan[], start: string): IdrLoan[] {
 }
 
 function repaymentStart(plan: PlannerPlan, months: number): string {
-  const start = addMonths(plan.settings.graduationDate, plan.settings.graceMonths);
+  const start = voluntaryStartDate(plan);
   if (!validDate(start) || !validDate(addMonths(start, months))) {
     throw new Error('Federal comparison would exceed the supported calendar date range.');
   }

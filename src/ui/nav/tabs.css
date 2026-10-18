@@ -1,0 +1,29 @@
+/* Destination tabs (one row; scrolls inside itself on narrow screens, never the page). */
+.tabs { margin: 4px 0 0; border-bottom: 1px solid var(--line); }
+.tabs ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+.tabs li { flex: 0 0 auto; }
+.tab {
+  display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 14px;
+  color: var(--ink-2); text-decoration: none; font-weight: 600; white-space: nowrap;
+  border-bottom: 3px solid transparent; border-radius: 8px 8px 0 0;
+}
+.tab:hover { background: var(--accent-soft); color: var(--ink); }
+.tab[aria-current='page'] { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-badge {
+  min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: var(--danger); color: #ffffff;
+  font-size: 0.78rem; font-weight: 700; line-height: 22px; text-align: center;
+}
+@media (forced-colors: active) { .tab-badge { border: 1px solid CanvasText; } .tab[aria-current='page'] { border-bottom-color: Highlight; } }
+@media (max-width: 560px) {
+  .tab { padding: 8px 10px; gap: 6px; }
+  .tab .shell-icon { display: none; }
+}
+@media print { .tabs { display: none; } }
+.tab-label--short { display: none; }
+@media (max-width: 560px) {
+  /* The short label replaces the long one visually; the full label stays the accessible name. */
+  .tab-label:not(.tab-label--short) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .tab-label--short { display: inline; }
+  .tabs ul { gap: 0; }
+  .tab { padding: 8px 9px; }
+}

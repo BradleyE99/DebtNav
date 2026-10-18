@@ -5,20 +5,31 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && tsc --noEmit -p server && vite build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "lint:money": "node scripts/check-money.mjs",
     "test:bench": "vitest bench --run src/engine/planner.bench.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p server",
     "lint": "eslint . && node scripts/check-money.mjs",
     "test:e2e": "playwright test",
-    "check": "npm run typecheck && npm run lint && npm test && npm run test:bench && npm run build"
+    "check": "npm run typecheck && npm run lint && npm test && npm run test:bench && npm run build",
+    "dev:local": "node scripts/dev-local.mjs",
+    "dev:api": "tsx watch --env-file-if-exists=.env server/src/index.ts",
+    "start": "tsx --env-file-if-exists=.env server/src/index.ts",
+    "db:migrate": "tsx --env-file-if-exists=.env server/src/migrate.ts"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.10",
+    "@hono/node-server": "^2.1.5",
     "decimal.js": "^10.6.0",
+    "exceljs": "^4.4.0",
+    "hono": "^4.13.13",
+    "openid-client": "^6.8.8",
+    "pg": "^8.23.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
@@ -26,6 +37,8 @@
     "@playwright/test": "^1.64.0",
     "@testing-library/react": "^16.0.0",
     "@testing-library/user-event": "^14.0.0",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitest/coverage-v8": "^5.0.4",
@@ -36,6 +49,8 @@
     "fast-check": "^4.10.2",
     "globals": "^17.13.0",
     "jsdom": "^26.0.0",
+    "oauth2-mock-server": "^9.3.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.71.2",
     "vite": "^8.3.4",

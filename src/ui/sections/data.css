@@ -1,0 +1,16 @@
+/* Your data dashboard: save state, JSON/Excel exchange, deletion. */
+.save-state { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+.save-state__choices { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; }
+.save-state__action { min-height: 36px; padding: 0.35rem 0.75rem; font-size: 0.9rem; }
+.data-block { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 4px; min-width: 0; }
+.data-block > h3 { margin: 12px 0 6px; font-size: 1.05rem; }
+.data-template { border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px 12px; margin: 8px 0; min-width: 0; }
+.data-template legend { font-weight: 600; padding: 0 4px; }
+.data-template__fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 16px; }
+.data-template__fields .field { flex: 0 1 160px; }
+.excel-preview { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: #f7faf8; min-width: 0; }
+.excel-preview h4 { margin: 0 0 6px; overflow-wrap: anywhere; }
+.excel-preview td.wrap { white-space: normal; min-width: 200px; }
+@media (max-width: 600px) {
+  .data-template__fields .field { flex: 1 1 140px; }
+}

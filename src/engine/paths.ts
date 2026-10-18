@@ -1,7 +1,7 @@
 /**
  * Field-path helpers (see the planner-contracts.ts header). A path is a dot path through object
  * keys that uses record IDs, never array indexes, for arrays:
- *   'settings.graceMonths', 'loans.<loanId>.annualRate', 'schoolYears.<yearId>.costItems.<itemId>.amount'.
+ *   'settings.graduationDate', 'loans.<loanId>.annualRate', 'schoolYears.<yearId>.costItems.<itemId>.amount'.
  * All functions are pure and never mutate their inputs.
  */
 import type { OverrideValue, PlannerPlan, Scenario } from './planner-contracts';
@@ -12,7 +12,6 @@ const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
 
 /** Optional leaf keys that may be overridden even when the base record omits them. */
 const OPTIONAL_KEYS: Record<string, readonly string[]> = {
-  repayment: ['maxMonths'],
   'loans.*': ['monthlyPayment', 'payInterestWhileInSchool', 'accruesInterestInSchool', 'capitalizeInterest'],
   'lifeEvents.*': ['recurrence', 'recurrenceEndDate'],
 };
@@ -124,12 +123,17 @@ export function overridablePaths(plan: PlannerPlan): OverridablePath[] {
   const paths: OverridablePath[] = [
     { path: 'settings.startDate', label: 'School start date', kind: 'date' },
     { path: 'settings.graduationDate', label: 'Graduation date', kind: 'date' },
-    { path: 'settings.graceMonths', label: 'Grace period (months)', kind: 'integer' },
     { path: 'postGradIncome.annualSalary', label: 'Starting annual salary', kind: 'money' },
     { path: 'postGradIncome.monthlyDebtBudget', label: 'Monthly debt budget', kind: 'money' },
     { path: 'repayment.extraMonthlyPayment', label: 'Extra monthly payment', kind: 'money' },
     { path: 'repayment.strategyId', label: 'Payoff strategy', kind: 'choice', options: listStrategies().map(entry => entry.id) },
   ];
+  // US-507: only the field of the current voluntary-start kind exists (overrides of the other kind would dangle).
+  if (plan.repayment.voluntaryStart.kind === 'afterGraduation') {
+    paths.splice(2, 0, { path: 'repayment.voluntaryStart.months', label: 'Payments start (months after graduation)', kind: 'integer' });
+  } else {
+    paths.splice(2, 0, { path: 'repayment.voluntaryStart.date', label: 'Payments start date', kind: 'date' });
+  }
   plan.schoolYears.forEach((year, index) => {
     const prefix = `schoolYears.${year.id}`;
     const yearLabel = `Year ${index + 1}`;

@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import type { CostItem, LifeEvent, PlannerLoan, PlannerPlan, PlannerProjection, PlannerComparisons, Resource, StrategyId } from './planner-contracts';
+import { SIMULATION_CAP_MONTHS } from './planner-contracts';
 import { createDefaultPlan, calculatePlannerProjection, calculatePlannerComparisons, applyScenario, reconcileSchoolYears } from './planner';
 import { D, sum } from './money';
 import { addMonths } from './dates';
@@ -30,13 +31,13 @@ function compare(plan: PlannerPlan): PlannerComparisons {
 }
 
 describe('SRS examples (explicit)', () => {
-  it('US-102: repayment start = graduation + grace months (0–12), clamping month ends', () => {
+  it('US-102/US-507: payments start = graduation + chosen months (v4 voluntary start), clamping month ends', () => {
     for (const grace of [0, 6, 12]) {
       const plan = createDefaultPlan();
-      plan.settings.graceMonths = grace;
+      plan.repayment.voluntaryStart = { kind: 'afterGraduation', months: grace };
       expect(project(plan).repayment.repaymentStartDate).toBe(addMonths('2030-05-20', grace));
     }
-    expect(createDefaultPlan().settings.graceMonths).toBe(6);
+    expect(createDefaultPlan().repayment.voluntaryStart).toEqual({ kind: 'afterGraduation', months: 6 });
     const plan = reconcileSchoolYears({ ...createDefaultPlan(), settings: { ...createDefaultPlan().settings, graduationDate: '2031-08-31' } });
     expect(project(plan).repayment.repaymentStartDate).toBe('2032-02-29');
   });
@@ -149,19 +150,22 @@ describe('edge cases', () => {
     expect(repayment.warnings[0].code).toBe('NON_AMORTIZING');
   });
 
-  it('an incomplete projection at the horizon never reports a debt-free date or total interest', () => {
+  it('an incomplete projection at the simulation cap never reports a debt-free date or total interest', () => {
     const plan = createDefaultPlan();
     plan.loans = [loan('a', '50000', '0.07')];
-    plan.repayment.maxMonths = 24;
+    // v4: no user horizon. A budget 5 cents above the monthly interest cannot pay $50,000 in 100 years.
+    plan.postGradIncome.monthlyDebtBudget = new D('50000').times('0.07').div(12).toDecimalPlaces(2).plus('0.05').toFixed(2);
     const repayment = project(plan).repayment;
     expect(repayment).toMatchObject({ status: 'horizonExceeded', debtFreeDate: null, totalInterestPaid: null });
-    expect(repayment.amortizationSchedule).toHaveLength(24);
+    expect(repayment.amortizationSchedule).toHaveLength(SIMULATION_CAP_MONTHS);
     expect(repayment.warnings.map(warning => warning.code)).toEqual(['HORIZON_EXCEEDED']);
+    expect(repayment.warnings[0].message).toMatch(/no payoff found within the modeled limit of 100 years/i);
+    expect(repayment.warnings[0].message).toMatch(/not forgiveness/i);
     expect(project(plan).timeline.some(entry => entry.id === 'debt-free')).toBe(false);
   });
 
   it('accrues across a leap day by actual days and pays on clamped month ends', () => {
-    const plan = reconcileSchoolYears({ ...createDefaultPlan(), settings: { ...createDefaultPlan().settings, graduationDate: '2030-08-31', graceMonths: 6 } });
+    const plan = reconcileSchoolYears({ ...createDefaultPlan(), settings: { ...createDefaultPlan().settings, graduationDate: '2030-08-31' } });
     plan.loans = [loan('a', '3650', '0.10', { disbursementDate: '2028-02-29' })];
     const repayment = project(plan).repayment;
     expect(repayment.repaymentStartDate).toBe('2031-02-28');
@@ -202,6 +206,8 @@ const loanArb = fc.record({
   monthlyPayment: fc.option(moneyArb(300_000), { nil: undefined }),
   capitalizeInterest: fc.option(fc.boolean(), { nil: undefined }),
   payInterestWhileInSchool: fc.option(fc.boolean(), { nil: undefined }),
+  /** US-507: private/other loan grace terms (undefined = not configured). */
+  loanGrace: fc.option(fc.integer({ min: 0, max: 12 }), { nil: undefined }),
 });
 const eventArb = fc.record({
   type: fc.constantFrom('income', 'windfall', 'expense', 'aid') as fc.Arbitrary<LifeEvent['type']>,
@@ -216,15 +222,14 @@ const planArb = fc.record({
   budget: moneyArb(500_000),
   extra: moneyArb(50_000),
   grace: fc.integer({ min: 0, max: 12 }),
-  maxMonths: fc.integer({ min: 1, max: 600 }),
   strategyId: fc.constantFrom('avalanche', 'snowball', 'custom') as fc.Arbitrary<StrategyId>,
   scenarioBudget: moneyArb(500_000),
 });
 type PlanInput = typeof planArb extends fc.Arbitrary<infer T> ? T : never;
 function buildPlan(input: PlanInput): PlannerPlan {
   const plan = createDefaultPlan();
-  plan.settings.graceMonths = input.grace;
-  plan.repayment = { ...plan.repayment, maxMonths: input.maxMonths, strategyId: input.strategyId, extraMonthlyPayment: input.extra };
+  // v4: the voluntary start varies independently of each loan's required dates (early, on time, late).
+  plan.repayment = { ...plan.repayment, voluntaryStart: { kind: 'afterGraduation', months: input.grace }, strategyId: input.strategyId, extraMonthlyPayment: input.extra };
   plan.postGradIncome.monthlyDebtBudget = input.budget;
   plan.loans = input.loans.map((item, i) => ({
     id: `l${i}`, name: `Loan ${i}`, type: item.type, principal: item.principal, annualRate: item.rate,
@@ -232,6 +237,7 @@ function buildPlan(input: PlanInput): PlannerPlan {
     ...(item.monthlyPayment === undefined ? {} : { monthlyPayment: item.monthlyPayment }),
     ...(item.capitalizeInterest === undefined ? {} : { capitalizeInterest: item.capitalizeInterest }),
     ...(item.payInterestWhileInSchool === undefined ? {} : { payInterestWhileInSchool: item.payInterestWhileInSchool }),
+    ...(item.loanGrace === undefined || item.type === 'subsidized' || item.type === 'unsubsidized' ? {} : { requiredPayment: { graceMonths: item.loanGrace } }),
   }));
   plan.repayment.customOrder = plan.loans.map(item => item.id).reverse();
   plan.lifeEvents = input.events.map((item, i) => ({
@@ -252,7 +258,7 @@ describe('NFR-3 / NFR-11 properties (fast-check)', () => {
       expect(JSON.stringify(plan)).toBe(before);
       if (!core.ok || !secondary.ok) throw new Error(JSON.stringify(!core.ok ? core.errors : !secondary.ok && secondary.errors));
       const repayment = core.value.repayment;
-      expect(repayment.amortizationSchedule.length).toBeLessThanOrEqual(input.maxMonths);
+      expect(repayment.amortizationSchedule.length).toBeLessThanOrEqual(SIMULATION_CAP_MONTHS);
       for (const row of repayment.amortizationSchedule) {
         expect(new D(row.remainingBalance).gte(0)).toBe(true);
         for (const item of row.loans) {
@@ -274,7 +280,7 @@ describe('NFR-3 / NFR-11 properties (fast-check)', () => {
 
   it('more extra payment never means more months (monotonicity)', () => {
     fc.assert(fc.property(fc.array(loanArb, { minLength: 1, maxLength: 4 }), moneyArb(200_000), fc.integer({ min: 1, max: 50_000 }), (loans, extra, more) => {
-      const plan = buildPlan({ loans: loans.map(item => ({ ...item, monthlyPayment: undefined, capitalizeInterest: undefined })), events: [], budget: '0.00', extra, grace: 6, maxMonths: 1200, strategyId: 'avalanche', scenarioBudget: '0.00' });
+      const plan = buildPlan({ loans: loans.map(item => ({ ...item, monthlyPayment: undefined, capitalizeInterest: undefined })), events: [], budget: '0.00', extra, grace: 6, strategyId: 'avalanche', scenarioBudget: '0.00' });
       plan.postGradIncome.monthlyDebtBudget = project(plan).minimumTotal;
       const first = project(plan).repayment;
       plan.repayment.extraMonthlyPayment = new D(extra).plus(new D(more).div(100)).toFixed(2);

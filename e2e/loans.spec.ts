@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+import { test, expect, openPlanner } from './support/fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 // Expandable loan cards, exercised with real mouse and keyboard input in Chromium.
@@ -10,7 +11,18 @@ const card = (page: Page, n: number) => cards(page).nth(n - 1);
 const toggle = (target: Locator) => target.locator('h3 button');
 const details = (target: Locator) => target.locator('.loan-card__details');
 const field = (target: Locator, suffix: string) => target.locator(`[id$=".${suffix}"]`);
-const keyFigure = (page: Page, id: 'key-debt-free' | 'key-interest') => page.getByTestId(id);
+/** Term, required-payment terms and interest options are under each card's "Advanced" disclosure. */
+const advanced = (target: Locator) => target.locator('details.loan-card__advanced');
+async function navigate(page: Page, name: string) {
+  await page.getByRole('navigation', { name: 'Planner sections' }).getByRole('link', { name, exact: true }).click();
+}
+async function readResults(page: Page) {
+  await navigate(page, 'Results');
+  const interest = await page.getByTestId('headline-interest').innerText();
+  const debtFree = await page.getByTestId('headline-debt-free').innerText();
+  await navigate(page, 'Loan Amounts');
+  return { interest, debtFree };
+}
 
 /** Click into a field, select everything, delete it with the keyboard, then type like a person. */
 async function retype(page: Page, input: Locator, text: string) {
@@ -63,12 +75,11 @@ async function addTwoLoans(page: Page) {
   await waitForSave(page);
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-  await page.getByRole('button', { name: 'I understand' }).click();
+// Every test signs in as a fresh account (empty plan) through the real OIDC flow.
+test.beforeEach(async ({ page, user }) => {
+  await openPlanner(page, user);
   await expect(page.getByRole('heading', { name: 'Estimates, not financial advice' })).toHaveCount(0);
+  await navigate(page, 'Loan Amounts');
 });
 
 test('summaries, collapsed on load, individual, bulk, and keyboard toggling', async ({ page }) => {
@@ -102,6 +113,7 @@ test('summaries, collapsed on load, individual, bulk, and keyboard toggling', as
 
   // Clicking a field or a checkbox inside an open card does not toggle it.
   await field(card(page, 2), 'principal').click();
+  await advanced(card(page, 2)).locator(':scope > summary').click();
   await field(card(page, 2), 'capitalizeInterest').click();
   await expectExpanded(card(page, 2));
 
@@ -163,23 +175,24 @@ test('invalid text survives collapsing and the collapsed summary flags it', asyn
   await expect(toggle(first)).toContainText('Principal $6,000.00');
 });
 
-test('valid edits persist through collapse, sidebar navigation, and reload', async ({ page }) => {
+test('valid edits persist through collapse, tab navigation, and reload', async ({ page }) => {
   await addTwoLoans(page);
   const first = card(page, 1);
   await retype(page, field(first, 'principal'), '7250.5');
+  await advanced(first).locator(':scope > summary').click();
   await retype(page, field(first, 'termMonths'), '180');
   await page.keyboard.press('Tab');
   await expect(toggle(first)).toContainText('Principal $7,250.50');
   await toggle(first).click();
   await expectCollapsed(first);
 
-  // Use the sidebar to leave and return; navigation must not remount the fields.
-  await page.getByRole('link', { name: 'Repayment', exact: true }).click();
-  await expect(page).toHaveURL(/#repayment$/);
-  await page.getByRole('link', { name: 'Loans', exact: true }).click();
+  // Use the tabs to leave and return; valid values belong to the shared plan.
+  await navigate(page, 'Results');
+  await expect(page).toHaveURL(/#results$/);
+  await navigate(page, 'Loan Amounts');
   await expect(page).toHaveURL(/#loans$/);
   await expectCollapsed(first);
-  await expectExpanded(card(page, 2));
+  await expectCollapsed(card(page, 2));
   await toggle(first).click();
   await expect(field(first, 'principal')).toHaveValue('7,250.50');
   await expect(field(first, 'termMonths')).toHaveValue('180');
@@ -193,44 +206,51 @@ test('valid edits persist through collapse, sidebar navigation, and reload', asy
   await expect(field(card(page, 1), 'termMonths')).toHaveValue('180');
 });
 
-test('editing principal and rate updates the key results', async ({ page }) => {
+test('editing principal and rate updates the overview results', async ({ page }) => {
   await addTwoLoans(page);
+  const before = await readResults(page);
+  expect(before.interest).toMatch(/^\$[\d,]+\.\d\d$/);
   const first = card(page, 1);
-  await expect(keyFigure(page, 'key-interest')).toHaveText(/^\$[\d,]+\.\d\d$/);
-  const interestBefore = await keyFigure(page, 'key-interest').innerText();
+  await toggle(first).click();
   await retype(page, field(first, 'principal'), '25000');
   await page.keyboard.press('Tab');
-  await expect(keyFigure(page, 'key-interest')).not.toHaveText(interestBefore);
-  const interestAfterPrincipal = await keyFigure(page, 'key-interest').innerText();
-  const debtFreeBefore = await keyFigure(page, 'key-debt-free').innerText();
-
+  const afterPrincipal = await readResults(page);
+  expect(afterPrincipal.interest).not.toBe(before.interest);
+  await toggle(first).click();
   await retype(page, field(first, 'annualRate'), '12');
   await page.keyboard.press('Tab');
-  await expect(keyFigure(page, 'key-interest')).not.toHaveText(interestAfterPrincipal);
   await expect(toggle(first)).toContainText('Annual rate 12%');
   await expect(toggle(first)).toContainText('Principal $25,000.00');
-  // Debt-free date is a month and year (it may or may not move with the rate under a minimum-payment plan).
-  await expect(keyFigure(page, 'key-debt-free')).toHaveText(/^[A-Z][a-z]{2} \d{4}$|No debt-free date/);
-  expect(debtFreeBefore).toMatch(/^[A-Z][a-z]{2} \d{4}$|No debt-free date/);
+  const afterRate = await readResults(page);
+  expect(afterRate.interest).not.toBe(afterPrincipal.interest);
+  expect(afterRate.debtFree).toMatch(/^[A-Z][a-z]{2} \d{4}$|No debt-free date/);
 });
 
 test('gap-created loans open for editing and deletion preserves the remaining card', async ({ page }) => {
   await addTwoLoans(page);
-  await page.getByRole('button', { name: 'Create loan from gap for Year 1' }).click();
+  await navigate(page, 'College Costs');
+  // "Create loan" offers what Year 1 still needs (gap + buffer − its loans); with no costs it is disabled.
+  // $25,000 of costs − $17,500 of loans already for the year → $7,500.
+  await page.getByRole('button', { name: 'Add Year 1 costs' }).click();
+  await expect(page.locator('input[id$=".amount"]')).toBeFocused();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('25000');
+  await page.keyboard.press('Tab');
+  await page.getByRole('button', { name: /^Create loan for \$7,500\.00 for Year 1$/ }).click();
   await expect(cards(page)).toHaveCount(3);
   const gapLoan = card(page, 3);
   await expectExpanded(gapLoan);
   await expect(field(gapLoan, 'name')).toBeFocused();
   await expect(toggle(gapLoan)).toContainText('from Year 1 gap');
-  await expectExpanded(card(page, 1));
-  await expectExpanded(card(page, 2));
+  await expectCollapsed(card(page, 1));
+  await expectCollapsed(card(page, 2));
   await retype(page, field(gapLoan, 'name'), 'Gap loan');
   await page.keyboard.press('Tab');
   await gapLoan.getByRole('button', { name: 'Remove loan Gap loan' }).click();
   await expect(cards(page)).toHaveCount(2);
   await expect(page.locator('#loans-heading')).toBeFocused();
-  await expectExpanded(card(page, 1));
-  await expectExpanded(card(page, 2));
+  await expectCollapsed(card(page, 1));
+  await expectCollapsed(card(page, 2));
   await expect(toggle(card(page, 1))).toContainText('Principal $5,500.00');
   await expect(toggle(card(page, 2))).toContainText('Annual rate 9.25%');
   await waitForSave(page);

@@ -1,10 +1,11 @@
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { PlannerDocument, PlannerPlan, PlannerStore, StorageLike } from '../../engine/planner-contracts';
 import { createDefaultPlan } from '../../engine/planner';
 import { exportDocument } from '../../data/storage';
 import { STORAGE_KEY } from '../../data/storage';
 import { usePlannerDocument } from '../../state/usePlannerDocument';
 import PlannerApp from '../PlannerApp';
+import { resolveDashboard } from '../nav/navigation';
 
 export function memoryStorage(initial: Record<string, string> = {}): StorageLike & { data: Map<string, string> } {
   const data = new Map(Object.entries(initial));
@@ -49,6 +50,27 @@ export function renderPlanner(options: { plan?: PlannerPlan; disclaimerDismissed
     handle.store = store;
     return <PlannerApp store={store} />;
   }
+  window.scrollTo = () => {};
   const view = render(<Harness />);
   return { ...view, storage, plan: () => handle.store!.document.plan, store: () => handle.store! };
+}
+
+/**
+ * Select a destination through the same tab link users click. Ids of pages folded into the four
+ * destinations (repayment, income, setup, events, …) open their new home with every section expanded;
+ * 'data' opens the account menu's Your data dialog.
+ */
+export function navigateTo(id: string, openEditors = false) {
+  if (id === 'data') {
+    fireEvent.click(screen.getByRole('button', { name: /^Account/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Your data' }));
+    return;
+  }
+  const resolved = resolveDashboard(id);
+  const legacy = Boolean(resolved && resolved.dashboard !== id);
+  const target = resolved?.dashboard || id;
+  const link = document.querySelector<HTMLAnchorElement>(`nav a[href="#${target}"]`);
+  if (!link) throw new Error(`No dashboard link for ${id}`);
+  fireEvent.click(link);
+  if (openEditors || legacy) for (const detail of screen.getByRole('main').querySelectorAll('details')) detail.open = true;
 }

@@ -111,7 +111,6 @@ describe('US-604 avalanche interest invariant', () => {
   it('holds (within cent rounding) for capitalized loans whenever the budget covers the minimums', () => {
     fc.assert(fc.property(fc.array(loanArbitrary, { minLength: 2, maxLength: 5 }), fc.integer({ min: 0, max: 200_000 }), fc.array(fc.nat(), { maxLength: 5 }), (loans, extraCents, shuffle) => {
       const plan = createDefaultPlan();
-      plan.repayment.maxMonths = 1200;
       plan.loans = loans.map((item, i) => loan(`l${i}`, String(item.principal), new D(item.rateBasisPoints).div(10000).toString(), {
         termMonths: item.term, type: item.subsidized ? 'subsidized' : 'unsubsidized', disbursementDate: '2028-01-01',
       }));
@@ -145,6 +144,8 @@ describe('US-604 avalanche interest invariant', () => {
     if (!result.ok) throw new Error('comparison failed');
     const interest = Object.fromEntries(result.value.strategyComparisons.map(item => [item.id, new D(item.projection.totalInterestPaid!)]));
     expect(interest.avalanche.gt(interest.snowball)).toBe(true);
-    expect(sum([interest.avalanche.minus(interest.snowball)]).gt(100)).toBe(true);
+    // Since the minimum also amortizes separate (uncapitalized) interest, the gap is small ($23.67)
+    // but real: avalanche ranks by rate and ignores that the separate interest bears no interest.
+    expect(sum([interest.avalanche.minus(interest.snowball)]).toFixed(2)).toBe('23.67');
   });
 });

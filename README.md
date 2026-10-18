@@ -76,18 +76,17 @@ DebtNav produces estimates for planning purposes only. It is not financial advic
 
 ## Using the connected planner
 
-Run `npm ci` and `npm run dev`, then open the printed localhost URL (Node.js 22.12+). There is no Calculate button: every valid edit updates the results immediately and is saved in this browser.
+Run `npm ci`, then `npm run dev:local` and open http://localhost:5173 (Node.js 22.12+). This starts the app, the API and a local test sign-in page in one terminal (Ctrl+C stops all three), so no Google credentials are needed: sign in with any test user name, and each name is its own account. Plans are kept in `.data/pglite`. To use real Google sign-in instead, run `npm run dev:api` and `npm run dev` with credentials in `.env` (see [docs/BACKEND.md](docs/BACKEND.md)). The Introduction is public; sign in to create and save your plan. There is no Calculate button: every valid edit updates the results immediately and is saved to your account.
 
-1. Edit school dates and grace; academic years are added or removed to match, and data in remaining years is kept.
-2. Add annual or semester costs and resources (grants, scholarships, hourly or fixed job income with an unavailable share, savings, family help) and a borrowing buffer. Click into any field, clear it and type. Blank or invalid text stays visible with a field-level error, and results keep the last valid value.
-3. Create a loan from a year's gap or add loans manually. Loan cards show principal and annual rate while collapsed; open a card to edit its fields, or use Expand all / Collapse all. Saved loans start collapsed; new loans open for editing. Invalid drafts stay visible when reopened and flag the card; only valid edits are saved across reloads.
-4. Enter salary and monthly debt budget, choose avalanche, snowball or custom order, and reorder custom priorities by dragging or with the keyboard.
-5. Add dated income changes, windfalls, aid changes and expenses. Each event shows how it moves your debt-free date. Add scenarios that override only the fields you change; everything else inherits base-plan edits.
-6. Inspect year summaries, per-loan and combined amortization schedules, strategy and scenario comparisons, the balance chart with its table alternative, the timeline, and the federal context section. Reload to confirm edits persist. Export or import a versioned JSON backup. Deleting all data requires confirmation.
+1. **Introduction:** sign in, then use the Continue link to pick up where you left off.
+2. **College Costs:** choose a school year (Edit dates changes the school start and graduation). Add costs, grants and savings, work while in school, and one-time aid or cost changes. The year shows total cost, non-loan resources, funding gap, loans already assigned to the year and what is still unfunded.
+3. **Loan Amounts:** add loans or create one for a year's unfunded amount. Cards stay compact; open one to edit it, and use Advanced for required-payment terms and interest options. Optionally group loans by academic year.
+4. **Results:** total debt, monthly payment, debt-free date, time until debt-free and total interest. Expand Earnings & payment, Repayment start, Bonuses & extra payments, Income changes or the optional Payoff target to adjust repayment. A checklist links straight to anything missing. View yearly breakdown summarises the monthly projection by calendar or repayment year; the monthly schedule is inside it, and More has the strategy comparison and balance chart.
+5. **Account menu:** Your data (export or import JSON and Excel, blank template, delete), undo history, About these estimates and Sign out. Undo is always in the header.
 
-The plan is saved under `debtnav.plan` (schema version 3). Projections are never stored. If storage is unavailable, the app keeps working and says changes will not be saved. Unreadable saved data is preserved, and autosave pauses until you import a backup or delete it. Older development data (schema 2) is migrated. A saved or imported plan with a loan disbursed after repayment start is repaired with a visible notice.
+Plans are saved to your account on the server (PostgreSQL in production, embedded PGlite locally) with visible saving, saved, offline and error states. Saves are versioned: if the plan changed on another device, you choose which version to keep instead of one silently overwriting the other. Projections are never stored. A per-account copy in this browser holds unsynced edits only and is never shown as saved. After signing in, a plan from an earlier local-only version is offered for explicit migration. Undo/history stays available for the whole session (no timer), including undoing an import. Your Data exchanges versioned JSON and Excel (.xlsx) files: a blank template, a full export, and an import that is validated server-side and previewed before it replaces the plan. Deleting your data requires confirmation and removes your server records and this browser's cache; signing out deletes nothing. Backend setup, security, deployment and backup policy: [docs/BACKEND.md](docs/BACKEND.md).
 
-Use the left sidebar to move between planner sections. Collapse it to an icon rail for more space; this preference is remembered on this device. On narrow screens, Menu opens a drawer that closes after navigation, on an outside click, or with Escape. Navigation moves keyboard focus to the selected section heading.
+Navigation is four tabs: Introduction, College Costs, Loan Amounts and Results. Old links such as `#income`, `#repayment` or `#data` open the destination that now holds those inputs. Scenarios and federal settings are no longer shown, but any saved ones are kept and still exported.
 
 ## Architecture and verification
 
@@ -98,7 +97,9 @@ Shared contracts live in `src/engine/planner-contracts.ts`. Calculations are pur
 | `npm run check` | Typecheck, ESLint (incl. jsx-a11y), money lint, all unit/property/component tests, recalculation benchmark, production build |
 | `npm run test:coverage` | ≥ 90% line coverage across engine, policy, data, state and integrations |
 | `npm run test:bench` | US-701 reference plan (4 years, 8 loans, 360 months) |
-| `npm run test:e2e` | Real-Chromium journey (keyboard typing, reload, export/import, delete), axe incl. color contrast, keyboard-only, 360 px, print, keystroke latency. Run `npx playwright install chromium` once first. |
+| `npm run test:e2e` | Real-browser journeys (dashboard navigation, earnings calculations, reload, export/import, delete), axe incl. color contrast, keyboard controls, 360 px, equivalent zoom reflow, and print. Run `npx playwright install chromium` once first. |
+
+To use an installed Microsoft Edge instead of bundled Chromium on Windows, run `$env:PLAYWRIGHT_CHANNEL = 'msedge'; npm run test:e2e` in PowerShell.
 
 `.github/workflows/ci.yml` runs these on push. It has not been run on GitHub yet.
 

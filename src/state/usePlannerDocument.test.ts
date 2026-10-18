@@ -2,6 +2,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultPlan } from '../engine/planner';
+import { SCHEMA_VERSION } from '../engine/planner-contracts';
 import type { PlannerPlan, StorageLike } from '../engine/planner-contracts';
 import { STORAGE_KEY, exportDocument } from '../data/storage';
 import { usePlannerDocument } from './usePlannerDocument';
@@ -158,29 +159,98 @@ describe('usePlannerDocument', () => {
     expect(storage.writes).toBe(0);
   });
 
-  it('offers one-level undo for marked destructive edits only', () => {
+  it('keeps a persistent LIFO undo history: later edits never retire earlier entries (US-904)', () => {
     const storage = memory();
     const { result } = renderHook(() => usePlannerDocument({ storage }));
-    act(() => {
-      result.current.updatePlan(plan => ({ ...plan, loans: [{ id: 'l1', name: 'Loan', type: 'private', principal: '100.00', annualRate: '0.05', disbursementDate: plan.settings.startDate, termMonths: 120 }] }));
-    });
+    expect(result.current.history.canUndo).toBe(false);
     expect(result.current.undo).toBeNull();
+    act(() => {
+      result.current.updatePlan(plan => ({ ...plan, loans: [{ id: 'l1', name: 'Loan', type: 'private', principal: '100.00', annualRate: '0.05', disbursementDate: plan.settings.startDate, termMonths: 120 }] }), { undoLabel: 'Add loan' });
+    });
     act(() => {
       result.current.markUndoable('Remove loan Loan');
       result.current.updatePlan(plan => ({ ...plan, loans: [] }));
     });
-    expect(result.current.undo?.label).toBe('Remove loan Loan');
-    expect(result.current.document.plan.loans).toEqual([]);
-    act(() => { result.current.undo!.apply(); });
-    expect(result.current.document.plan.loans.map(loan => loan.id)).toEqual(['l1']);
-    expect(result.current.undo).toBeNull();
-    act(() => { vi.runAllTimers(); });
-    expect(storedPlan(storage).loans).toHaveLength(1);
-
-    // A later ordinary edit retires the undo so it can never discard newer work.
-    act(() => { result.current.markUndoable('Remove'); result.current.updatePlan(plan => ({ ...plan, loans: [] })); });
+    act(() => { vi.advanceTimersByTime(5000); });
+    // An ordinary edit later does not retire the deletion's undo entry.
     act(() => { result.current.updatePlan(setSalary('1.00')); });
-    expect(result.current.undo).toBeNull();
+    expect(result.current.history.entries.map(entry => entry.label)).toEqual(['Add loan', 'Remove loan Loan', 'Edit']);
+    // No timer expires history.
+    act(() => { vi.advanceTimersByTime(60 * 60_000); });
+    expect(result.current.history.canUndo).toBe(true);
+
+    act(() => { result.current.history.undo(); });
+    expect(result.current.document.plan.postGradIncome.annualSalary).not.toBe('1.00');
+    act(() => { result.current.history.undo(); });
+    expect(result.current.document.plan.loans.map(loan => loan.id)).toEqual(['l1']);
+    expect(result.current.undo?.label).toBe('Add loan');
+    act(() => { vi.runAllTimers(); });
+    // The reversal is saved like any edit.
+    expect(storedPlan(storage).loans).toHaveLength(1);
+    act(() => { result.current.undo!.apply(); });
+    expect(result.current.document.plan.loans).toEqual([]);
+    expect(result.current.history.canUndo).toBe(false);
+  });
+
+  it('coalesces a burst of unlabelled edits (typing) into one undo entry; labelled edits stay separate', () => {
+    const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
+    const original = result.current.document.plan.postGradIncome.annualSalary;
+    act(() => { result.current.updatePlan(setSalary('4.00')); });
+    act(() => { vi.advanceTimersByTime(200); result.current.updatePlan(setSalary('45.00')); });
+    act(() => { vi.advanceTimersByTime(200); result.current.updatePlan(setSalary('450.00')); });
+    expect(result.current.history.entries).toHaveLength(1);
+    act(() => { vi.advanceTimersByTime(2000); result.current.updatePlan(setSalary('5.00')); });
+    act(() => { result.current.updatePlan(setSalary('6.00'), { undoLabel: 'Set salary' }); });
+    expect(result.current.history.entries.map(entry => entry.label)).toEqual(['Edit', 'Edit', 'Set salary']);
+    act(() => { result.current.history.undo(); });
+    act(() => { result.current.history.undo(); });
+    expect(result.current.document.plan.postGradIncome.annualSalary).toBe('450.00');
+    act(() => { result.current.history.undo(); });
+    expect(result.current.document.plan.postGradIncome.annualSalary).toBe(original);
+  });
+
+  it('coalesces a burst of labelled field edits only with coalesce and the same label', () => {
+    const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
+    const original = result.current.document.plan.postGradIncome.annualSalary;
+    const field = { undoLabel: 'Change salary', coalesce: true };
+    act(() => { result.current.updatePlan(setSalary('5.00'), field); });
+    act(() => { vi.advanceTimersByTime(100); result.current.updatePlan(setSalary('50.00'), field); });
+    act(() => { vi.advanceTimersByTime(100); result.current.updatePlan(setSalary('501.00'), field); });
+    expect(result.current.history.entries.map(entry => entry.label)).toEqual(['Change salary']);
+    // A different label, or a labelled edit without coalesce (e.g. a removal), starts a new entry.
+    act(() => { result.current.updatePlan(setSalary('600.00'), { undoLabel: 'Change budget', coalesce: true }); });
+    act(() => { result.current.updatePlan(setSalary('700.00'), { undoLabel: 'Change budget' }); });
+    expect(result.current.history.entries.map(entry => entry.label)).toEqual(['Change salary', 'Change budget', 'Change budget']);
+    act(() => { result.current.history.undo(); result.current.history.undo(); });
+    expect(result.current.document.plan.postGradIncome.annualSalary).toBe('501.00');
+    act(() => { result.current.history.undo(); });
+    expect(result.current.document.plan.postGradIncome.annualSalary).toBe(original);
+  });
+
+  it('caps the history at 50 entries, dropping the oldest; clear() empties it without changing the plan', () => {
+    const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
+    for (let i = 1; i <= 55; i++) act(() => { result.current.updatePlan(setSalary(`${i}.00`), { undoLabel: `Salary ${i}` }); });
+    expect(result.current.history.entries).toHaveLength(50);
+    expect(result.current.history.entries[0].label).toBe('Salary 6');
+    const plan = result.current.document;
+    act(() => { result.current.history.clear(); });
+    expect(result.current.history.canUndo).toBe(false);
+    expect(result.current.document).toBe(plan);
+  });
+
+  it('import and replaceDocument are undoable; a rejected edit adds no entry', () => {
+    const { result } = renderHook(() => usePlannerDocument({ storage: memory() }));
+    const original = result.current.document;
+    const other = { plan: { ...createDefaultPlan(), postGradIncome: { ...createDefaultPlan().postGradIncome, annualSalary: '77.00' } }, disclaimerDismissed: true };
+    act(() => { result.current.importText(exportDocument(other)); });
+    expect(result.current.undo?.label).toBe('Import');
+    act(() => { result.current.replaceDocument({ ...other, disclaimerDismissed: false }, 'Import Excel file'); });
+    expect(result.current.undo?.label).toBe('Import Excel file');
+    act(() => { result.current.updatePlan(setSalary('-1')); });
+    expect(result.current.history.entries).toHaveLength(2);
+    act(() => { result.current.history.undo(); });
+    act(() => { result.current.history.undo(); });
+    expect(result.current.document).toEqual(original);
   });
 
   it('exports JSON and deletes all data back to a fresh plan', () => {
@@ -190,13 +260,15 @@ describe('usePlannerDocument', () => {
     act(() => { result.current.updatePlan(setSalary('1.00')); result.current.dismissDisclaimer(); });
     act(() => { vi.runAllTimers(); });
     const exported = result.current.exportJson();
-    expect(exported.ok && JSON.parse(exported.value).schemaVersion).toBe(3);
+    expect(exported.ok && JSON.parse(exported.value).schemaVersion).toBe(SCHEMA_VERSION);
     let deleted!: ReturnType<typeof result.current.deleteAllData>;
     act(() => { deleted = result.current.deleteAllData(); });
     expect(deleted.ok).toBe(true);
     expect(storage.data.has(STORAGE_KEY)).toBe(false);
     expect(storage.getItem('unrelated')).toBe('keep');
     expect(result.current.document).toEqual({ plan: createDefaultPlan(), disclaimerDismissed: false });
+    // Deletion is not undoable and clears the history.
+    expect(result.current.history.canUndo).toBe(false);
     act(() => { vi.runAllTimers(); });
     expect(storage.data.has(STORAGE_KEY)).toBe(false);
   });

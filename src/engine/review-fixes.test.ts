@@ -56,7 +56,7 @@ describe('m1: scenarios that cannot be projected are reported, not dropped', () 
     plan.loans = [loan('a', 'Grad loan', { disbursementDate: '2030-01-15' })];
     plan.scenarios = [
       { id: 'faster', name: 'Faster', overrides: { 'postGradIncome.monthlyDebtBudget': '600.00' } },
-      { id: 'early', name: 'Graduate early', overrides: { 'settings.graduationDate': '2029-05-20', 'settings.graceMonths': 0 } },
+      { id: 'early', name: 'Graduate early', overrides: { 'settings.graduationDate': '2029-05-20', 'repayment.voluntaryStart.months': 0 } },
     ];
     const result = calculatePlannerComparisons(plan);
     if (!result.ok) throw new Error(JSON.stringify(result.errors));
@@ -64,7 +64,7 @@ describe('m1: scenarios that cannot be projected are reported, not dropped', () 
     expect(result.value.scenarioFailures).toEqual([{
       id: 'early', name: 'Graduate early',
       errors: [expect.objectContaining({ path: 'loans.a.disbursementDate' })],
-      reason: 'Loan "Grad loan": disbursement (2030-01-15) must be on or before repayment starts (2029-05-20).',
+      reason: 'Loan "Grad loan": disbursement (2030-01-15) must be on or before repayment starts (2029-11-20).',
     }]);
     expect(result.value.scenarioRange.earliest).not.toBeNull();
     expect(result.value.scenarioRange.latest).toBeNull();

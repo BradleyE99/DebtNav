@@ -1,19 +1,17 @@
 /**
- * Planner sections shown in the navigation (shared contract, owned by the lead).
- * `id` is the section element id (`#setup` …); destinations are unchanged from the old top nav.
+ * The four primary destinations, shown as tabs. `id` is the dashboard key and the URL hash; the ids
+ * predate the simplification so bookmarks of these four keep working (older hashes: see navigation.ts).
  */
-export type NavIconName = 'timeline' | 'costs' | 'loans' | 'repayment' | 'events' | 'scenarios' | 'federal' | 'results' | 'data';
+export type NavIconName = 'overview' | 'costs' | 'loans' | 'results';
 
-export interface NavItem { id: string; label: string; icon: NavIconName }
+/** `short` is shown instead of `label` on narrow screens so the four tabs fit on one row. */
+export interface NavItem { id: string; label: string; short: string; icon: NavIconName }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { id: 'setup', label: 'Timeline', icon: 'timeline' },
-  { id: 'school', label: 'Costs', icon: 'costs' },
-  { id: 'loans', label: 'Loans', icon: 'loans' },
-  { id: 'repayment', label: 'Repayment', icon: 'repayment' },
-  { id: 'events', label: 'Life events', icon: 'events' },
-  { id: 'scenarios', label: 'Scenarios', icon: 'scenarios' },
-  { id: 'federal', label: 'Federal', icon: 'federal' },
-  { id: 'results', label: 'Results', icon: 'results' },
-  { id: 'data', label: 'Your data', icon: 'data' },
+  { id: 'overview', label: 'Introduction', short: 'Intro', icon: 'overview' },
+  { id: 'school', label: 'College Costs', short: 'Costs', icon: 'costs' },
+  { id: 'loans', label: 'Loan Amounts', short: 'Loans', icon: 'loans' },
+  { id: 'results', label: 'Results', short: 'Results', icon: 'results' },
 ];
+
+export const isDashboard = (id: string | undefined): id is string => id !== undefined && NAV_ITEMS.some(item => item.id === id);

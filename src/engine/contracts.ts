@@ -50,7 +50,7 @@ export interface FieldError {
   message: string;
 }
 export interface ProjectionWarning {
-  code: 'NEGATIVE_AMORTIZATION' | 'NON_AMORTIZING' | 'HORIZON_EXCEEDED';
+  code: 'NEGATIVE_AMORTIZATION' | 'NON_AMORTIZING' | 'HORIZON_EXCEEDED' | 'MISSED_REQUIRED_PAYMENT';
   message: string;
   loanId?: string;
   date?: ISODate;
@@ -87,8 +87,12 @@ export interface InSchoolInterestPayment {
 export interface LoanPayment {
   loanId: string;
   payment: Money;
+  /** Interest PAID this month (payments go to interest first). */
   interest: Money;
+  /** Interest CHARGED this month (accrued, whether paid, kept separate or later capitalized). */
+  interestCharged: Money;
   principal: Money;
+  /** Everything owed on the loan after this payment (balance + uncapitalized interest). */
   remainingBalance: Money;
 }
 export interface AmortizationMonth {
@@ -96,7 +100,14 @@ export interface AmortizationMonth {
   date: ISODate;
   loans: LoanPayment[];
   payment: Money;
+  /** Interest PAID this month. */
   interest: Money;
+  /** Interest CHARGED this month (C11). remainingBalance = previous + newBorrowing + interestCharged − payment. */
+  interestCharged: Money;
+  /** Owed on loans that join the projection this month (disbursed after the voluntary start). */
+  newBorrowing: Money;
+  /** Part of this month's payment that came from bonuses/windfalls (C4; in the payoff month only what was used). */
+  windfallApplied: Money;
   principal: Money;
   remainingBalance: Money;
 }
@@ -106,6 +117,9 @@ export interface Projection {
   firstPaymentDate: ISODate;
   loans: LoanAtRepayment[];
   balanceAtRepaymentStart: Money;
+  /** Everything owed at the voluntary start on loans in the projection from month 1: principal +
+   * interest accrued before it − interest paid in school, capitalized or not (C2/D3). */
+  owedAtVoluntaryStart: Money;
   inSchoolInterestPayments: InSchoolInterestPayment[];
   amortizationSchedule: AmortizationMonth[];
   debtFreeDate: ISODate | null;

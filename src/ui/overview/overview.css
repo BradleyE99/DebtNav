@@ -1,0 +1,8 @@
+/* Introduction (signed-in tab and public page). */
+.overview-tasks { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
+.overview-task { padding: 14px 16px; border-radius: 8px; background: var(--accent-soft); min-width: 0; }
+.overview-task h3 { margin: 0 0 4px; font-size: 1.02rem; }
+.overview-task p { margin: 0; }
+.overview-continue { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 16px 0 4px; }
+.overview-continue p { margin: 0; color: var(--ink-2); }
+@media (max-width: 600px) { .overview-tasks { grid-template-columns: minmax(0, 1fr); } }

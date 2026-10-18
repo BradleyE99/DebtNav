@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import type { FieldError, Result } from '../../engine/planner-contracts';
 import type { ParseResult } from '../../data/parse';
+import { useDraftRegistry } from './draftRegistry';
 
 /** What a commit handler may return: a store Result (errors are shown at the field) or nothing. */
 export type CommitResult = Result<unknown> | void;
@@ -36,15 +37,27 @@ export function errorForField(errors: readonly FieldError[], id: string): string
  *   last valid stored value and shows an error.
  * - When the stored value changes elsewhere (undo, import, copy-forward), the text follows it unless
  *   the current text already means that value.
+ * - Text that could not be saved is kept in the draft registry, so it survives the dashboard
+ *   unmounting and readiness can report it.
  */
 export function useDraftField<T>({ id, value, format, parse, onCommit, equals = Object.is, settleMs }: DraftFieldOptions<T>) {
-  const [state, setState] = useState<DraftState<T>>(() => ({ text: format(value), seenValue: value, error: null }));
+  const registry = useDraftRegistry();
+  const [state, setState] = useState<DraftState<T>>(() => {
+    const saved = registry?.get(id);
+    return saved && Object.is(saved.seenValue, value)
+      ? { text: saved.text, seenValue: value, error: saved.error }
+      : { text: format(value), seenValue: value, error: null };
+  });
   const latest = useRef({ value, onCommit, equals });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<{ value: T } | null>(null);
 
   useEffect(() => { latest.current = { value, onCommit, equals }; });
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  // Kept on unmount on purpose: the draft outlives its dashboard (see draftRegistry.tsx).
+  useEffect(() => {
+    registry?.set(id, state.error ? { text: state.text, error: state.error, seenValue: state.seenValue } : null);
+  }, [registry, id, state]);
 
   // Sync from the store during render (React's "adjust state when a prop changes" pattern).
   if (!Object.is(state.seenValue, value)) {

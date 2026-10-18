@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 /** Expandable loan cards: collapsed summaries, toggling, bulk controls, focus, and draft/error preservation. */
-import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { PlannerPlan, PlannerStore } from '../../engine/planner-contracts';
 import { renderPlanner, samplePlan } from '../testing/renderPlanner';
 import { revealField } from '../reveal';
 import PlannerApp from '../PlannerApp';
 
-afterEach(cleanup);
+beforeEach(() => { window.history.replaceState(null, '', '/#loans'); });
+afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); });
+const navigate = (name: string) => fireEvent.click(within(screen.getByRole('navigation', { name: 'Planner sections' })).getByRole('link', { name }));
 
 const byId = (id: string) => {
   const element = document.getElementById(id);
@@ -95,7 +97,8 @@ describe('loan cards', () => {
   it('opens a loan created from a year gap', async () => {
     const user = userEvent.setup();
     const view = renderPlanner({ plan: { ...samplePlan(), loans: [], repayment: { ...samplePlan().repayment, customOrder: [] } } });
-    await user.click(screen.getByRole('button', { name: 'Create loan from gap for Year 1' }));
+    navigate('College Costs');
+    await user.click(screen.getByRole('button', { name: /^Create loan .*for Year 1$/ }));
     const [loan] = view.plan().loans;
     expect(isOpen(loan.id)).toBe(true);
     expect(document.activeElement?.id).toBe(`loans.${loan.id}.name`);
@@ -186,22 +189,27 @@ describe('loan cards', () => {
     expect(principal.getAttribute('aria-invalid')).toBe('true');
   });
 
-  it('opens a gap-created loan while retaining other cards and their edits', async () => {
+  it('opens a gap-created loan while retaining valid edits across dashboards', async () => {
     const user = userEvent.setup();
-    const view = renderPlanner({ plan: samplePlan() });
+    // Beta loan pays for the next academic year, so Year 1 ($6,000 gap) still needs $6,000 − Alpha loan.
+    const base = samplePlan();
+    const view = renderPlanner({ plan: { ...base, loans: base.loans.map(loan => loan.id === 'loan-b' ? { ...loan, academicYear: '2027-2028' } : loan) } });
     await user.click(toggle('loan-a'));
     const principal = byId('loans.loan-a.principal');
     await user.clear(principal);
-    await user.type(principal, '6100');
-    await user.click(screen.getByRole('button', { name: 'Create loan from gap for Year 1' }));
+    await user.type(principal, '1100');
+    navigate('College Costs');
+    await user.click(screen.getByRole('button', { name: /^Create loan .*for Year 1$/ }));
     const loan = view.plan().loans[2];
     expect(isOpen(loan.id)).toBe(true);
     expect(document.activeElement?.id).toBe(`loans.${loan.id}.name`);
-    expect(isOpen('loan-a')).toBe(true);
+    expect(isOpen('loan-a')).toBe(false);
     expect(isOpen('loan-b')).toBe(false);
-    expect(principal.value).toBe('6,100.00');
-    expect(view.plan().loans[0].principal).toBe('6100.00');
-    expect(view.plan().loans[2].principal).toBe('6000.00');
+    await user.click(toggle('loan-a'));
+    expect(byId('loans.loan-a.principal').value).toBe('1,100.00');
+    expect(view.plan().loans[0].principal).toBe('1100.00');
+    // Prefilled with what the year still needs: gap + buffer − loans already allocated to it.
+    expect(view.plan().loans[2].principal).toBe('4900.00');
   });
 
   it('expands the loan that holds a revealed field', async () => {
@@ -224,6 +232,7 @@ describe('loan cards', () => {
       dismissDisclaimer: () => {}, saveStatus: { state: 'saved', message: null, savedAt: null }, undo: null,
       markUndoable: () => {}, importText: () => ({ ok: false, errors: [] }), exportJson: () => ({ ok: true, value: '' }),
       deleteAllData: () => ({ ok: true, notice: null }),
+      history: { entries: [], canUndo: false, undo: () => {}, clear: () => {} }, replaceDocument: () => {},
     };
     render(<PlannerApp store={store} />);
     expect(toggle('loan-b').textContent).toContain('Unnamed loan 2');
