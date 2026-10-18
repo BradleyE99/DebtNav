@@ -72,7 +72,7 @@ docker run -p 8787:8787 --env-file .env.production debtnav
 - **Manual export:** run `pg_dump -Fc "$DATABASE_URL" > debtnav-$(date +%F).dump`. Dumps contain personal financial data: store them encrypted and delete them within the same 7 days.
 - **Deletion:** `DELETE /api/account/data` removes the user's plan, sessions and account row from the live database immediately, and the client clears its local cache. Signing out alone deletes nothing.
 - **Retention:** plans are kept until the user deletes them. Sessions expire after `SESSION_TTL_DAYS`. Login state expires after 10 minutes.
-- **PGlite** (the default without `DATABASE_URL`) is for local development and tests. To back it up, stop the server and copy the `PGLITE_DIR` directory.
+- **PGlite** (the default without `DATABASE_URL`) is for local development and tests. In production the server refuses to start without `DATABASE_URL` unless `ALLOW_EMBEDDED_DB=1`, because PGlite needs about 700 MB of memory and a container's disk is not durable. To back it up, stop the server and copy the `PGLITE_DIR` directory.
 
 ## Tests
 

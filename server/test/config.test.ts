@@ -1,6 +1,6 @@
 /** Production configuration as Render runs it (docs/DEPLOY-RENDER.md). */
 import { describe, expect, it } from 'vitest';
-import { loadConfig, oidcConfigured } from '../src/config';
+import { loadConfig, oidcConfigured, startupProblem } from '../src/config';
 import { redirectUri } from '../src/auth/oidc';
 
 const render = {
@@ -33,6 +33,16 @@ describe('production config on Render', () => {
     const config = loadConfig({ ...render, OIDC_ALLOW_INSECURE: '1', OIDC_ALLOW_LOGIN_HINT: '1' });
     expect(config.oidc.allowInsecure).toBe(false);
     expect(config.oidc.allowLoginHint).toBe(false);
+  });
+
+  it('refuses to start in production without DATABASE_URL (the embedded DB needs ~700 MB and loses data on restart)', () => {
+    const { DATABASE_URL: _omit, ...withoutDb } = render;
+    expect(startupProblem(loadConfig(render))).toBeNull();
+    expect(startupProblem(loadConfig(withoutDb))).toMatch(/DATABASE_URL is not set/);
+    expect(startupProblem(loadConfig({ ...withoutDb, ALLOW_EMBEDDED_DB: '1' }))).toBeNull();
+    // Development and tests keep the embedded database by default.
+    expect(startupProblem(loadConfig({ NODE_ENV: 'development' }))).toBeNull();
+    expect(startupProblem(loadConfig({ NODE_ENV: 'test', PGLITE_MEMORY: '1' }))).toBeNull();
   });
 
   it('without Google credentials sign-in reports "not configured" instead of faking it', () => {

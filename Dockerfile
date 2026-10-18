@@ -6,7 +6,9 @@ COPY package.json package-lock.json ./
 # Build tools (TypeScript, Vite) are devDependencies, so the build stage installs everything.
 RUN npm ci --include=dev
 COPY . .
-RUN npx tsc --noEmit && npx tsc --noEmit -p server && npx vite build
+# Only the app bundle is built here (~200 MB of memory). Type checks run in CI on every push; running
+# them here as well needs ~470 MB and exceeded the 512 MB build/run limit of small hosts.
+RUN npx vite build
 
 FROM node:22-alpine
 WORKDIR /app
@@ -23,4 +25,6 @@ USER node
 EXPOSE 8787
 # Hosts such as Render set PORT; the health check follows it.
 HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- "http://localhost:${PORT}/api/health" || exit 1
-CMD ["node", "node_modules/tsx/dist/cli.mjs", "server/src/index.ts"]
+# One Node process: `--import tsx` loads TypeScript in-process (the tsx CLI would start a second process).
+# The server needs ~110 MB with PostgreSQL; it refuses to start in production without DATABASE_URL.
+CMD ["node", "--import", "tsx", "server/src/index.ts"]
