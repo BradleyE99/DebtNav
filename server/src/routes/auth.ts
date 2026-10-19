@@ -19,6 +19,25 @@ export function safeReturnTo(value: string | undefined): string {
 
 const appUrl = (origin: string, path: string) => `${origin}${path}`;
 
+/** OAuth error codes worth naming in the log, with the usual fix. Never includes secrets, tokens or codes. */
+const AUTH_HINTS: Record<string, string> = {
+  invalid_client: 'Google rejected the client ID/secret: re-copy OIDC_CLIENT_ID and OIDC_CLIENT_SECRET from the same OAuth client',
+  invalid_grant: 'the sign-in code was rejected (expired, already used, or the redirect URI differs from the one used to start sign-in)',
+  redirect_uri_mismatch: 'the redirect URI is not listed on the Google OAuth client',
+  unauthorized_client: 'this OAuth client is not allowed to use this flow',
+};
+
+/** A short, secret-free description of a sign-in failure for the server log. */
+export function describeAuthFailure(failure: unknown): string {
+  const error = failure as { name?: string; code?: string; error?: string; error_description?: string; cause?: { error?: string } } | null;
+  const oauthError = error?.error ?? error?.cause?.error;
+  // Google's error_description is a short public message (e.g. "Unauthorized"); it never contains the secret or code.
+  const description = typeof error?.error_description === 'string' ? `(${error.error_description.slice(0, 200)})` : undefined;
+  const parts = [error?.name ?? 'Error', error?.code, oauthError, description].filter((part): part is string => typeof part === 'string' && part.length > 0);
+  const hint = oauthError ? AUTH_HINTS[oauthError] : undefined;
+  return hint ? `${parts.join(' ')}: ${hint}` : parts.join(' ');
+}
+
 export function authRoutes() {
   const routes = new Hono<Env>();
 
@@ -35,7 +54,7 @@ export function authRoutes() {
         [start.state, start.codeVerifier, start.nonce, returnTo, deps.now()]);
       return c.redirect(start.url.href, 302);
     } catch (error) {
-      console.error('[auth] login start failed', (error as Error)?.name ?? 'Error');
+      console.error('[auth] login start failed', describeAuthFailure(error));
       return c.redirect(appUrl(deps.config.appOrigin, '/?authError=failed'), 302);
     }
   });
@@ -64,7 +83,7 @@ export function authRoutes() {
       setSessionCookie(c, session.token, session.expiresAt);
       return c.redirect(appUrl(origin, safeReturnTo(flow.return_to)), 302);
     } catch (failure) {
-      console.error('[auth] callback failed', (failure as Error)?.name ?? 'Error', (failure as { code?: string })?.code ?? '');
+      console.error('[auth] callback failed', describeAuthFailure(failure));
       return c.redirect(appUrl(origin, '/?authError=failed'), 302);
     }
   });

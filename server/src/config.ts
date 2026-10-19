@@ -36,6 +36,12 @@ const int = (value: string | undefined, fallback: number, min: number, max: numb
   return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
 };
 
+/** A pasted credential without surrounding whitespace, line breaks or quote marks; null when empty. */
+export function credential(value: string | undefined): string | null {
+  const trimmed = (value ?? '').trim().replace(/^(['"])([\s\S]*)\1$/, '$2').trim();
+  return trimmed || null;
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): ServerConfig {
   const production = env.NODE_ENV === 'production';
   // Render sets RENDER_EXTERNAL_URL (https://<service>.onrender.com); an explicit APP_ORIGIN (e.g. a custom domain) wins.
@@ -57,8 +63,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     allowEmbeddedDb: !production || flag(env.ALLOW_EMBEDDED_DB),
     oidc: {
       issuer: env.OIDC_ISSUER || 'https://accounts.google.com',
-      clientId: env.OIDC_CLIENT_ID || null,
-      clientSecret: env.OIDC_CLIENT_SECRET || null,
+      clientId: credential(env.OIDC_CLIENT_ID),
+      clientSecret: credential(env.OIDC_CLIENT_SECRET),
       allowInsecure: !production && flag(env.OIDC_ALLOW_INSECURE),
       allowLoginHint: !production && flag(env.OIDC_ALLOW_LOGIN_HINT),
     },
