@@ -157,3 +157,53 @@ describe('CSRF and concurrency guards', () => {
     expect(stored.document.plan.repayment.voluntaryStart).toEqual({ kind: 'afterGraduation', months: 6 });
   });
 });
+
+describe('account pinning (X-DebtNav-User): a request made for one account never touches another', () => {
+  const pin = (userId: string) => ({ 'X-DebtNav-User': userId });
+
+  it('a mismatched header is refused with 409 accountChanged and nothing is written', async () => {
+    const put = await api(ctx, 'PUT', '/api/plan', {
+      cookie: bob.cookie, headers: pin(alice.userId),
+      body: { baseRevision: null, envelope: envelope(docWithBudget('999.99')) },
+    });
+    expect(put.status).toBe(409);
+    expect((await put.json()).error).toBe('accountChanged');
+    const bobs = await (await api(ctx, 'GET', '/api/plan', { cookie: bob.cookie })).json();
+    expect(bobs.document).toBeNull();
+    expect(await alicesBudget()).toEqual({ revision: 1, budget: '111.11' });
+  });
+
+  it('a mismatched header cannot read the session user\'s plan, me, or delete data', async () => {
+    const get = await api(ctx, 'GET', '/api/plan', { cookie: alice.cookie, headers: pin(bob.userId) });
+    expect(get.status).toBe(409);
+    expect(JSON.stringify(await get.json())).not.toContain('111.11');
+    expect((await api(ctx, 'GET', '/api/me', { cookie: alice.cookie, headers: pin(bob.userId) })).status).toBe(409);
+    expect((await api(ctx, 'DELETE', '/api/account/data', { cookie: alice.cookie, headers: pin(bob.userId) })).status).toBe(409);
+    expect((await api(ctx, 'POST', '/api/workbook/import/commit', { cookie: alice.cookie, headers: pin(bob.userId), body: { previewId: 'x', baseRevision: 1 } })).status).toBe(409);
+    expect(await alicesBudget()).toEqual({ revision: 1, budget: '111.11' });
+  });
+
+  it('a matching header works normally', async () => {
+    const get = await api(ctx, 'GET', '/api/plan', { cookie: alice.cookie, headers: pin(alice.userId) });
+    expect(get.status).toBe(200);
+    const put = await api(ctx, 'PUT', '/api/plan', {
+      cookie: alice.cookie, headers: pin(alice.userId),
+      body: { baseRevision: 1, envelope: envelope(docWithBudget('222.22')) },
+    });
+    expect(put.status).toBe(200);
+    expect(await alicesBudget()).toEqual({ revision: 2, budget: '222.22' });
+  });
+
+  it('without the header behaviour is unchanged', async () => {
+    const put = await api(ctx, 'PUT', '/api/plan', { cookie: alice.cookie, body: { baseRevision: 1, envelope: envelope(docWithBudget('333.33')) } });
+    expect(put.status).toBe(200);
+    expect(await alicesBudget()).toEqual({ revision: 2, budget: '333.33' });
+  });
+
+  it('the header never replaces the session: without a cookie it is still 401', async () => {
+    for (const [method, path] of [['GET', '/api/plan'], ['PUT', '/api/plan'], ['GET', '/api/me'], ['DELETE', '/api/account/data']] as const) {
+      const response = await api(ctx, method, path, { headers: pin(alice.userId), body: method === 'GET' ? undefined : {} });
+      expect(response.status).toBe(401);
+    }
+  });
+});

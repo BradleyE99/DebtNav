@@ -2,6 +2,21 @@
 
 Updated 2026-10-17 for the four-destination simplification (see the first section); earlier sections are kept as history. Implementation status and verification are recorded separately. "E2E" means the real Chromium tests in `e2e/journey.spec.ts`, `e2e/sidebar.spec.ts` and `e2e/loans.spec.ts`. "Vitest" means unit, property or component tests. Latest local gate: 517/517 Vitest tests, 2/2 benchmarks, typecheck, ESLint, money lint and production build pass. Prior coverage was 98.3% across engine, policy, data, state and integrations; coverage was not rerun for this UI continuation. Nothing has been pushed, merged or run in CI.
 
+## October 19 update: optional Google sign-in
+
+Scope: `docs/REQUIREMENTS-v0.2.md` §15 (US-1501–US-1504). It supersedes the login-required wording of US-1201 (first bullet), US-1302 (public page) and US-1001 (first sentence). No stored-plan schema change, no server migration; guest plans use the original `debtnav.plan` key and envelope. Server authorization unchanged except the `X-DebtNav-User` account-pinning check.
+
+| ID | Requirement | Implementation | Verification | Status |
+|---|---|---|---|---|
+| US-1501 | Full planner without sign-in; Start planning primary, Sign in with Google secondary; exact browser-saved text; truthful unavailable/quota states; guest JSON import/export; Excel account-only; no guest server requests | GuestApp.tsx; state/usePlannerDocument.ts; state/persistence.ts; ui/overview/*; auth/AuthComponents.tsx; sections/DataSection.tsx, saveStatusText.ts | usePlannerDocument tests; Overview.test.tsx; PlannerApp.test.tsx; e2e/guest.spec.ts | Done |
+| US-1502 | Existing Google auth/plans preserved; account vs browser status; failures never block or erase; account pinning (409 accountChanged) | AccountApp.tsx; state/api.ts; useServerPlannerDocument.ts; server/src/http.ts | useServerPlannerDocument.test.ts; server/test/authz.test.ts; e2e/auth.spec.ts | Done |
+| US-1503 | Guest plan kept through redirect/cancel/failure; explicit choice before any upload; open or replace-with-confirm (one plan per account); revision-checked replace; guarded late responses | App.tsx; state/guestTransition.ts; auth/GuestPlanChoice.tsx; state/accountGuard.ts | App.test.tsx; e2e/guest-transition.spec.ts | Done |
+| US-1504 | Unsaved-changes warning; revoke guard, clear account cache, logout, guest mode; pre-existing guest plan untouched; no account data in guest storage or another account | state/signOut.ts; state/session.ts; auth/SignOutDialog.tsx | signOut.test.ts; session.test.ts; accountGuard.test.ts; e2e/signout-isolation.spec.ts | Done |
+
+Latest local gate (2026-10-19, run by docs-verify after integration; nothing committed): typecheck (app + server), ESLint and money lint pass; Vitest 1098/1098 (62 files, including server and independent suites); benchmark 3/3; production build; Playwright 106/106 (desktop + narrow-360 105/105, API-restart project 1/1, run separately with `--no-deps`). Not run: real Google sign-in (mock OIDC only), Docker image build, CI, manual screen reader.
+
+Known limitations: one plan per account, so "save the guest plan separately" is not offered (open or replace only); Excel template/import/export need an account; guest plans stay in one browser profile (cleared with site data, often unavailable in private browsing, about 5 MB); Excel downloads are plain links and are not pinned to the tab's account; real Google sign-in is exercised only through the mock OIDC issuer.
+
 ## October 17 simplification (four destinations)
 
 Scope: `docs/REQUIREMENTS-v0.2.md` §14 (US-1301–US-1306). It supersedes the sidebar and separate-dashboard requirements recorded below (US-903 sidebar, US-905 Federal page, and the "Sidebar and loan-card continuation" navigation notes). No stored-plan schema change: SCHEMA_VERSION is unchanged, and scenarios, federal settings, life events, custom order and extra payment are still stored, exported and imported while their screens are hidden.

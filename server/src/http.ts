@@ -19,6 +19,8 @@ export type Env = { Variables: { user: SessionUser; ctx: AppContext } };
 
 export const CSRF_HEADER = 'x-requested-with';
 export const CSRF_VALUE = 'debtnav';
+/** Optional: the account id the browser tab believes it is signed in as (see requireUser). */
+export const ACCOUNT_HEADER = 'x-debtnav-user';
 
 export const json = (c: Context, status: number, body: unknown) =>
   c.json(body as object, status as 200);
@@ -47,13 +49,23 @@ export const csrfGuard: MiddlewareHandler<Env> = async (c, next) => {
   await next();
 };
 
-/** Resolves the session cookie; 401 when absent/expired. The owner of every query comes from here. */
+/**
+ * Resolves the session cookie; 401 when absent/expired. The owner of every query comes from here.
+ * When the request names an account (X-DebtNav-User) that is not the session user — the browser signed
+ * out or switched accounts in another tab — it is refused with 409 accountChanged before any read or
+ * write, so a late request from one account's page can never touch another account's plan. The header
+ * only narrows access: it never selects an owner, and requests without it behave as before.
+ */
 export const requireUser: MiddlewareHandler<Env> = async (c, next) => {
   const { deps } = c.var.ctx;
   const user = await resolveSession(deps.db, sessionCookie(c), deps.config.session.ttlDays, deps.now());
   if (!user) {
     if (sessionCookie(c)) clearSessionCookie(c);
     return json(c, 401, { error: 'unauthenticated', message: 'Sign in to continue.' });
+  }
+  const pinned = c.req.header(ACCOUNT_HEADER);
+  if (pinned !== undefined && pinned !== String(user.id)) {
+    return json(c, 409, { error: 'accountChanged', message: 'This page belongs to a different account than the one now signed in. Reload to continue.' });
   }
   c.set('user', user);
   await next();

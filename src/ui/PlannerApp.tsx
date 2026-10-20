@@ -6,7 +6,7 @@ import { Disclaimer } from './sections/Disclaimer';
 import { SchoolYearsSection } from './sections/SchoolYearsSection';
 import { LoansSection } from './sections/LoansSection';
 import { DataTools, SaveStatusBadge } from './sections/DataSection';
-import type { AccountInfo, WorkbookApi } from './sections/dataExchange';
+import type { AccountInfo, GuestInfo, WorkbookApi } from './sections/dataExchange';
 import { ResultsSection } from './results/ResultsSection';
 import { AppShell } from './nav/AppShell';
 import { AccountMenu } from './nav/AccountMenu';
@@ -14,24 +14,27 @@ import { NAV_ITEMS, isDashboard } from './nav/navItems';
 import { OPEN_DATA_EVENT, navigateDashboard, resolveDashboard, type NavigateDetail } from './nav/navigation';
 import { onRevealRequest, revealField } from './reveal';
 import { OverviewContent } from './overview/OverviewContent';
+import { GUEST_SIGN_IN_LABEL, SignInButton } from './auth/AuthComponents';
 import { UndoHistory, UndoHistoryPanel } from './common/UndoHistory';
 import { Dialog } from './common/Dialog';
 import './planner.css';
 
 export interface PlannerAppProps {
   store: PlannerStore;
-  /** Signed-in account (email + sign out). Omitted for the local store (tests, dev fallback). */
+  /** Signed-in account (email + sign out). Omitted in guest mode and for tests. */
   account?: AccountInfo;
+  /** Guest mode (no sign-in; plan saved on this browser): sign-in action and notice. */
+  guest?: GuestInfo;
   /** Excel template/export/import through the account API. Omitted → Excel controls explain they need an account. */
   workbook?: WorkbookApi;
-  /** Optional "Use my device plan" prompt (US-1201), rendered at the top of the main area. */
+  /** Optional prompt slot (guest-plan choice), rendered at the top of the main area. */
   devicePlanPrompt?: ReactNode;
 }
 
-export default function PlannerApp({ store, account, workbook, devicePlanPrompt }: PlannerAppProps) {
+export default function PlannerApp({ store, account, guest, workbook, devicePlanPrompt }: PlannerAppProps) {
   return (
     <PlannerProvider store={store}>
-      <PlannerLayout account={account} workbook={workbook} devicePlanPrompt={devicePlanPrompt} />
+      <PlannerLayout account={account} guest={account ? undefined : guest} workbook={workbook} devicePlanPrompt={devicePlanPrompt} />
     </PlannerProvider>
   );
 }
@@ -54,7 +57,7 @@ function readHash(current: string): HashTarget {
   return { ...resolved, dashboard };
 }
 
-function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppProps, 'store'>) {
+function PlannerLayout({ account, guest, workbook, devicePlanPrompt }: Omit<PlannerAppProps, 'store'>) {
   const { store, plan, readiness } = usePlanner();
   const [initial] = useState(() => readHash(''));
   const [activeDashboard, setActiveDashboard] = useState(initial.dashboard);
@@ -138,6 +141,8 @@ function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppP
               onOpenHistory={() => setDialog('history')}
               onOpenDisclaimer={() => setDisclaimerReopened(true)}
               onSignOut={account ? () => { void account.onSignOut(); } : undefined}
+              onSignIn={guest?.onSignIn}
+              signInUnavailableText={guest ? signInUnavailable(guest) : undefined}
             />
           </div>
         </header>
@@ -145,6 +150,7 @@ function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppP
       banner={showDisclaimer ? (
         <Disclaimer
           focusOnOpen={disclaimerReopened}
+          mode={guest ? 'guest' : 'account'}
           onDismiss={() => {
             store.dismissDisclaimer();
             setDisclaimerReopened(false);
@@ -157,14 +163,15 @@ function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppP
           <button type="button" id="disclaimer-open" className="link-button" onClick={() => setDisclaimerReopened(true)}>
             About these estimates (disclaimer)
           </button>
-          <p>DebtNav · Estimates for your own planning, not financial advice.{account ? ' Your plan is saved to your DebtNav account.' : ''}</p>
+          <p>DebtNav · Estimates for your own planning, not financial advice.{account ? ' Your plan is saved to your DebtNav account.' : guest ? " Without an account, your plan stays on this browser and is never sent to DebtNav's servers." : ''}</p>
         </footer>
       )}
     >
+      {guest?.notice}
       {devicePlanPrompt}
       <div className="dashboard" data-dashboard={activeDashboard}>
         {returnTo?.to === activeDashboard && <ReturnLink dashboard={returnTo.from} />}
-        {activeDashboard === 'overview' && <Introduction />}
+        {activeDashboard === 'overview' && <Introduction guest={guest} />}
         {activeDashboard === 'school' && <SchoolYearsSection requestedFieldId={requestedFieldId} onLoanCreated={id => { setFocusLoanId(id); navigateDashboard('loans', `loans.${id}.name`); }} />}
         {activeDashboard === 'loans' && <LoansSection focusLoanId={focusLoanId} onFocused={clearLoanFocus} />}
         {activeDashboard === 'results' && <ResultsSection />}
@@ -183,12 +190,49 @@ function PlannerLayout({ account, workbook, devicePlanPrompt }: Omit<PlannerAppP
   );
 }
 
-/** Introduction: the two questions, one status line and a Continue action. No results figures. */
-function Introduction() {
-  const { readiness } = usePlanner();
+/** Why the guest sign-in action is disabled, or undefined when it can be used. */
+function signInUnavailable(guest: GuestInfo): string | undefined {
+  if (guest.signInAvailable) return undefined;
+  return guest.signInUnavailableText ?? "Sign-in isn't available right now.";
+}
+
+/**
+ * Introduction: the two questions, one status line and the next action. No results figures.
+ * Guests: "Start planning" (primary, to the next destination that needs input) and the optional
+ * "Sign in with Google to save across devices" (secondary).
+ */
+function Introduction({ guest }: { guest?: GuestInfo }) {
+  const { readiness, store } = usePlanner();
   const next = readiness.items.find(item => item.severity === 'missing' || item.severity === 'invalid');
   const destination = (next && resolveDashboard(next.target.dashboard)?.dashboard) || 'results';
   const label = NAV_ITEMS.find(item => item.id === destination)?.label ?? 'Results';
+  if (guest) {
+    const unavailable = signInUnavailable(guest);
+    const state = store.saveStatus.state;
+    const savesHere = state === 'saved' || state === 'pending' || state === 'saving';
+    return (
+      <section id="overview" className="panel overview" aria-labelledby="overview-heading">
+        <OverviewContent headingId="overview-heading" heading="Plan your student loans">
+          <p className="guest-save-note">
+            No account needed: every page and calculation works without signing in.{' '}
+            {savesHere
+              ? 'Your plan is saved on this browser. Sign in with Google to save it to your account and open it on other devices.'
+              : "This browser isn't saving your changes right now, so export a copy from Your data to keep them."}
+          </p>
+          <div className="guest-actions">
+            <a href={`#${destination}`} className="button-like button-primary"
+              onClick={event => { event.preventDefault(); navigateDashboard(destination); }}>
+              Start planning
+            </a>
+            <SignInButton onSignIn={guest.onSignIn} primary={false} label={GUEST_SIGN_IN_LABEL} busy={guest.signInBusy}
+              disabled={Boolean(unavailable)} describedBy={unavailable ? 'guest-signin-unavailable' : undefined} />
+          </div>
+          {unavailable && <p id="guest-signin-unavailable" className="field-hint">{unavailable}</p>}
+          <p className="guest-save-note">{readinessStatusText(readiness)}</p>
+        </OverviewContent>
+      </section>
+    );
+  }
   return (
     <section id="overview" className="panel overview" aria-labelledby="overview-heading">
       <OverviewContent headingId="overview-heading" heading="Plan your student loans">

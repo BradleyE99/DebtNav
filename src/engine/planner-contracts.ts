@@ -229,7 +229,7 @@ export interface SaveResult { ok: boolean; notice: string | null }
  * 'saved' means saved to the server for the server store; a local cache is never reported as a server save.
  */
 export type SaveState = 'saved' | 'pending' | 'saving' | 'offline' | 'conflict' | 'error' | 'paused' | 'unavailable';
-export type SaveStatus = { state: SaveState; message: string | null; savedAt: string | null; revision?: number };
+export type SaveStatus = { state: SaveState; message: string | null; savedAt: string | null; revision?: number; scope?: 'browser' | 'account' };
 export interface UndoEntry { id: string; label: string; at: string }
 /** US-904: session-only undo history. Never expires on a timer or on later edits; LIFO; capped (50). */
 export interface UndoHistory {

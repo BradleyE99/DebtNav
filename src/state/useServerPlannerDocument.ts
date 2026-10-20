@@ -9,6 +9,14 @@
  * Unsaved edits are kept in an optional browser cache keyed by user id (debtnav.cache.<userId>) as an
  * "unsynced copy" — never reported as saved — and cleared once saved, on sign-out and on deletion.
  * pagehide/hidden flushes with fetch keepalive; beforeunload warns while changes are unsaved.
+ *
+ * Every status carries scope 'account' (saved means saved to the account, never to this browser).
+ * Optional sign-in: an AccountGuard ties the store to one signed-in session. Once the guard is revoked
+ * (sign-out, expired session, account switch) the store starts no saves or retries, ignores late
+ * responses, writes no cache, changes no status and calls no callbacks, so nothing can leak into the
+ * guest view or another account. Pass a client pinned with api.forUser(userId): if the browser's
+ * session now belongs to another account the server answers 'accountChanged' and the store blocks
+ * saving (edits stay in memory) and reports it through onAccountChanged.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PlannerDocument, PlannerStore, Result, SaveResult, SaveStatus } from '../engine/planner-contracts';
@@ -16,11 +24,13 @@ import { importDocumentDetailed, serializeDocument } from '../data/storage';
 import { validateDocument } from '../data/validation';
 import { useDocumentCore } from './documentCore';
 import { freshDocument } from './usePlannerDocument';
-import type { ApiClient, SavePlanResult } from './api';
+import type { ApiClient, LoadPlanResult, SavePlanResult } from './api';
+import type { AccountGuard } from './accountGuard';
+import { accountCacheKey } from './persistence';
 
 export const SERVER_SAVE_DEBOUNCE_MS = 800;
 export const MAX_RETRY_DELAY_MS = 30_000;
-export const cacheKey = (userId: string): string => `debtnav.cache.${userId}`;
+export const cacheKey = (userId: string): string => accountCacheKey(userId);
 
 export interface ServerStoreOptions {
   api: ApiClient;
@@ -32,14 +42,20 @@ export interface ServerStoreOptions {
   onUnauthorized?(): void;
   /** deleteAllData succeeded: account and data are gone, the user is signed out. */
   onAccountDeleted?(): void;
+  /** The browser's session now belongs to a different account (or none): re-check who is signed in. Defaults to onUnauthorized. */
+  onAccountChanged?(): void;
+  /** This mount's account session; once revoked the store goes quiet (see file comment). */
+  guard?: AccountGuard;
 }
+
+const ACCOUNT_CHANGED_MESSAGE = 'You signed out or switched accounts in another tab or window, so changes here are not being saved to this account. Your edits are kept on this page until you leave it.';
 
 export type ServerPlanLoad =
   | { status: 'loading' }
   | { status: 'error'; message: string; retry(): void }
   | { status: 'ready'; loaded: LoadedPlan };
 
-interface CachedCopy { document: PlannerDocument; baseRevision: number | null; at: string }
+export interface CachedCopy { document: PlannerDocument; baseRevision: number | null; at: string }
 
 function defaultCache(): ServerStoreOptions['cache'] {
   try {
@@ -74,12 +90,36 @@ const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON
 /** A plan loaded from the server (plus any unsynced copy from this browser), ready for the live store. */
 export interface LoadedPlan { document: PlannerDocument; revision: number | null; status: SaveStatus; needsSave: boolean; conflictWithServer?: { revision: number | null } }
 
+/**
+ * How a successfully loaded server plan and this browser's unsynced copy (for the same user) combine.
+ * Pure; used by useServerPlanLoad and by the guest-plan choice before the store mounts.
+ */
+export function buildLoadedPlan(result: Extract<LoadPlanResult, { ok: true }>, cached: CachedCopy | null): LoadedPlan {
+  const serverDocument = result.document;
+  if (serverDocument === null) {
+    // First sign-in: start from the default plan (or this browser's unsynced copy) and create it on the server.
+    return { document: cached?.document ?? freshDocument(), revision: null, needsSave: true, status: { state: 'pending', message: null, savedAt: null, scope: 'account' } };
+  }
+  if (cached && !sameJson(cached.document, serverDocument)) {
+    if (cached.baseRevision === result.revision) {
+      return { document: cached.document, revision: result.revision, needsSave: true, status: { state: 'pending', message: 'Restored changes from this browser that had not been saved to your account yet.', savedAt: result.updatedAt, revision: result.revision ?? undefined, scope: 'account' } };
+    }
+    // The server moved on since these edits: let the user choose instead of overwriting either.
+    return {
+      document: cached.document, revision: result.revision, needsSave: false, conflictWithServer: { revision: result.revision },
+      status: { state: 'conflict', message: 'This browser has changes that were not saved, but your plan was changed elsewhere since. Choose which version to keep.', savedAt: result.updatedAt, revision: result.revision ?? undefined, scope: 'account' },
+    };
+  }
+  return { document: serverDocument, revision: result.revision, needsSave: false, status: { state: 'saved', message: null, savedAt: result.updatedAt, revision: result.revision ?? undefined, scope: 'account' } };
+}
+
 /** Step 1: load the signed-in user's plan. Render the live store (useServerPlannerDocument) once ready. */
-export function useServerPlanLoad(options: Pick<ServerStoreOptions, 'api' | 'userId' | 'cache' | 'onUnauthorized'>): ServerPlanLoad {
+export function useServerPlanLoad(options: Pick<ServerStoreOptions, 'api' | 'userId' | 'cache' | 'onUnauthorized' | 'onAccountChanged' | 'guard'>): ServerPlanLoad {
   const [config] = useState(() => ({
     api: options.api,
     userId: options.userId,
     cache: options.cache === undefined ? defaultCache() : options.cache,
+    guard: options.guard ?? null,
   }));
   const callbacks = useRef(options);
   useEffect(() => { callbacks.current = options; });
@@ -91,9 +131,10 @@ export function useServerPlanLoad(options: Pick<ServerStoreOptions, 'api' | 'use
     let cancelled = false;
     void (async () => {
       const result = await config.api.loadPlan();
-      if (cancelled) return;
+      if (cancelled || (config.guard && !config.guard.active())) return;
       if (!result.ok) {
         if (result.kind === 'unauthorized') callbacks.current.onUnauthorized?.();
+        if (result.kind === 'accountChanged') (callbacks.current.onAccountChanged ?? callbacks.current.onUnauthorized)?.();
         setLoadState({ status: 'error', message: result.kind === 'offline' ? 'Your plan could not be loaded because you appear to be offline.' : result.message });
         return;
       }
@@ -101,26 +142,7 @@ export function useServerPlanLoad(options: Pick<ServerStoreOptions, 'api' | 'use
         setLoadState({ status: 'error', message: 'Your saved plan could not be read by this version of DebtNav. It has not been changed. Try again later or contact support.' });
         return;
       }
-      const cached = readCachedCopy(config.cache, config.userId);
-      const serverDocument = result.document;
-      let loaded: LoadedPlan;
-      if (serverDocument === null) {
-        // First sign-in: start from the default plan (or this browser's unsynced copy) and create it on the server.
-        loaded = { document: cached?.document ?? freshDocument(), revision: null, needsSave: true, status: { state: 'pending', message: null, savedAt: null } };
-      } else if (cached && !sameJson(cached.document, serverDocument)) {
-        if (cached.baseRevision === result.revision) {
-          loaded = { document: cached.document, revision: result.revision, needsSave: true, status: { state: 'pending', message: 'Restored changes from this browser that had not been saved yet.', savedAt: result.updatedAt, revision: result.revision ?? undefined } };
-        } else {
-          // The server moved on since these edits: let the user choose instead of overwriting either.
-          loaded = {
-            document: cached.document, revision: result.revision, needsSave: false, conflictWithServer: { revision: result.revision },
-            status: { state: 'conflict', message: 'This browser has changes that were not saved, but your plan was changed elsewhere since. Choose which version to keep.', savedAt: result.updatedAt, revision: result.revision ?? undefined },
-          };
-        }
-      } else {
-        loaded = { document: serverDocument, revision: result.revision, needsSave: false, status: { state: 'saved', message: null, savedAt: result.updatedAt, revision: result.revision ?? undefined } };
-      }
-      setLoadState({ status: 'ready', loaded });
+      setLoadState({ status: 'ready', loaded: buildLoadedPlan(result, readCachedCopy(config.cache, config.userId)) });
     })();
     return () => { cancelled = true; };
   }, [config, attempt]);
@@ -139,17 +161,20 @@ export function useServerPlanLoad(options: Pick<ServerStoreOptions, 'api' | 'use
  * Step 2: the live server PlannerStore for a loaded plan. Mount it (in a component rendered after
  * useServerPlanLoad is ready) once per user; `flush()` waits for pending saves (used before sign-out).
  */
-export function useServerPlannerDocument(options: ServerStoreOptions, loaded: LoadedPlan): { store: PlannerStore; flush(): Promise<void> } {
+export function useServerPlannerDocument(options: ServerStoreOptions, loaded: LoadedPlan): { store: PlannerStore; flush(): Promise<void>; isDirty(): boolean } {
   const [config] = useState(() => ({
     api: options.api,
     userId: options.userId,
     debounceMs: options.debounceMs ?? SERVER_SAVE_DEBOUNCE_MS,
     cache: options.cache === undefined ? defaultCache() : options.cache,
+    guard: options.guard ?? null,
   }));
   const callbacks = useRef(options);
   useEffect(() => { callbacks.current = options; });
+  /** False once this account session ended: nothing may save, cache, change status or call back. */
+  const live = useCallback(() => !config.guard || config.guard.active(), [config]);
 
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>(loaded.status);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>(() => ({ ...loaded.status, scope: 'account' }));
   const revisionRef = useRef<number | null>(loaded.revision);
   const latestRef = useRef<PlannerDocument>(loaded.document);
   /** Last document the server confirmed (null = nothing saved yet). */
@@ -161,20 +186,27 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
   const blockedRef = useRef<boolean>(false); // invalid or unauthorized: wait for the user
   const adoptedRef = useRef<PlannerDocument | null>(null);
   const deletedRef = useRef(false);
+  /** Set once the server said another account is signed in: the cache is off for good. */
+  const accountChangedRef = useRef(false);
   const mountedRef = useRef(true);
 
   const isDirty = useCallback(() => savedRef.current !== latestRef.current, []);
-  const setStatus = useCallback((status: SaveStatus) => { if (mountedRef.current) setSaveStatus(status); }, []);
+  const setStatus = useCallback((status: SaveStatus) => { if (mountedRef.current && live()) setSaveStatus({ ...status, scope: 'account' }); }, [live]);
 
   const writeCache = useCallback(() => {
-    if (!config.cache || deletedRef.current) return;
+    if (!config.cache || deletedRef.current || accountChangedRef.current || !live()) return;
     try {
       if (isDirty()) config.cache.setItem(cacheKey(config.userId), JSON.stringify({ document: latestRef.current, baseRevision: revisionRef.current, at: new Date().toISOString() }));
       else config.cache.removeItem(cacheKey(config.userId));
     } catch {
       // Cache is optional (storage full/blocked): the server copy is unaffected.
     }
-  }, [config, isDirty]);
+  }, [config, isDirty, live]);
+
+  const dropCache = useCallback(() => {
+    accountChangedRef.current = true;
+    clearCachedCopy(config.userId, config.cache);
+  }, [config]);
 
   const clearTimers = useCallback(() => {
     if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; }
@@ -185,14 +217,16 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
   const flushRef = useRef<(options?: { keepalive?: boolean }) => Promise<void>>(async () => undefined);
 
   const scheduleRetry = useCallback(() => {
+    if (!live()) return;
     const attempts = ++retryRef.current.attempts;
     const delay = Math.min(MAX_RETRY_DELAY_MS, 1000 * 2 ** Math.min(attempts - 1, 5));
     if (retryRef.current.timer !== null) clearTimeout(retryRef.current.timer);
     retryRef.current.timer = setTimeout(() => { retryRef.current.timer = null; void flushRef.current(); }, delay);
-  }, []);
+  }, [live]);
 
   const handle = useCallback((sent: PlannerDocument, result: SavePlanResult) => {
-    if (deletedRef.current) return;
+    // A response that arrives after sign-out or an account switch is dropped entirely.
+    if (deletedRef.current || !live()) return;
     if (result.ok) {
       retryRef.current.attempts = 0;
       revisionRef.current = result.revision;
@@ -205,6 +239,15 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
       } else {
         setStatus({ state: 'saved', message: result.repairs?.length ? result.repairs.join(' ') : null, savedAt: result.savedAt, revision: result.revision });
       }
+      return;
+    }
+    if (result.kind === 'accountChanged') {
+      // Another account (or nobody) is signed in now: this account may have been signed out elsewhere,
+      // so its browser cache is removed and never rewritten; edits stay in memory only, nothing retries.
+      blockedRef.current = true;
+      dropCache();
+      setStatus({ state: 'error', message: ACCOUNT_CHANGED_MESSAGE, savedAt: null, revision: revisionRef.current ?? undefined });
+      (callbacks.current.onAccountChanged ?? callbacks.current.onUnauthorized)?.();
       return;
     }
     writeCache();
@@ -234,11 +277,11 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
         blockedRef.current = true;
         setStatus({ state: 'error', message: `The server did not accept this plan: ${result.errors?.[0]?.message ?? result.message} Your changes are kept in this browser.`, savedAt: null, revision: revisionRef.current ?? undefined });
     }
-  }, [scheduleRetry, setStatus, writeCache]);
+  }, [dropCache, live, scheduleRetry, setStatus, writeCache]);
 
   const flush = useCallback(async (flushOptions: { keepalive?: boolean } = {}): Promise<void> => {
     if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; }
-    if (deletedRef.current || conflictRef.current || blockedRef.current || !isDirty()) return;
+    if (deletedRef.current || conflictRef.current || blockedRef.current || !live() || !isDirty()) return;
     if (inFlightRef.current) {
       // One request at a time; when it finishes, handle() saves the newest document.
       if (flushOptions.keepalive) writeCache();
@@ -252,18 +295,18 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
     });
     inFlightRef.current = request;
     return request;
-  }, [config, handle, isDirty, setStatus, writeCache]);
+  }, [config, handle, isDirty, live, setStatus, writeCache]);
   useEffect(() => { flushRef.current = flush; }, [flush]);
 
   const onChange = useCallback((next: PlannerDocument): void => {
     latestRef.current = next;
     if (adoptedRef.current === next) return;
     writeCache();
-    if (conflictRef.current || blockedRef.current) return;
+    if (conflictRef.current || blockedRef.current || !live()) return;
     setSaveStatus(previous => (previous.state === 'pending' || previous.state === 'saving' ? previous : { ...previous, state: 'pending', message: previous.state === 'offline' ? previous.message : null }));
     if (timerRef.current !== null) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => { timerRef.current = null; void flush(); }, config.debounceMs);
-  }, [config, flush, writeCache]);
+  }, [config, flush, live, writeCache]);
 
   const core = useDocumentCore({ initialDocument: loaded.document, onChange });
   const { replaceDocument: coreReplace, load, history, documentRef } = core;
@@ -277,6 +320,7 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
 
   // Excel import commits are saved by the server; adopt them as an undoable change without re-saving.
   useEffect(() => config.api.onPlanReplaced((document, revision) => {
+    if (!live()) return;
     clearTimers();
     adoptedRef.current = document;
     revisionRef.current = revision;
@@ -287,7 +331,10 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
     savedRef.current = document;
     writeCache();
     setStatus({ state: 'saved', message: null, savedAt: new Date().toISOString(), revision });
-  }), [config, clearTimers, coreReplace, setStatus, writeCache]);
+  }), [config, clearTimers, coreReplace, live, setStatus, writeCache]);
+
+  // Sign-out / account switch: stop every pending save and retry at once.
+  useEffect(() => config.guard?.onRevoke(() => clearTimers()), [config, clearTimers]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -314,7 +361,9 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
   useEffect(() => () => {
     mountedRef.current = false;
     if (retryRef.current.timer !== null) clearTimeout(retryRef.current.timer);
-    if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; void flushRef.current(); }
+    // Save an edit still waiting for the debounce, unless this account session already ended.
+    if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; if (live()) void flushRef.current(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const retrySave = useCallback(() => {
@@ -325,9 +374,18 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
   }, [flush]);
 
   const resolveConflict = useCallback((choice: 'reloadServer' | 'keepMine') => {
+    if (!live()) return;
     void (async () => {
       setStatus({ state: 'saving', message: choice === 'reloadServer' ? 'Loading the saved version…' : 'Saving your version…', savedAt: null, revision: revisionRef.current ?? undefined });
       const result = await config.api.loadPlan();
+      if (!live()) return;
+      if (!result.ok && result.kind === 'accountChanged') {
+        blockedRef.current = true;
+        dropCache();
+        setStatus({ state: 'error', message: ACCOUNT_CHANGED_MESSAGE, savedAt: null, revision: revisionRef.current ?? undefined });
+        (callbacks.current.onAccountChanged ?? callbacks.current.onUnauthorized)?.();
+        return;
+      }
       if (!result.ok || result.unreadable) {
         setStatus({ state: 'conflict', message: `The saved version could not be loaded (${result.ok ? 'unreadable' : result.message}). Try again.`, savedAt: null, revision: revisionRef.current ?? undefined });
         return;
@@ -352,7 +410,7 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
         await flush();
       }
     })();
-  }, [config, clearTimers, coreReplace, flush, setStatus, writeCache]);
+  }, [config, clearTimers, coreReplace, dropCache, flush, live, setStatus, writeCache]);
 
   const importText = useCallback((text: string): Result<PlannerDocument> => {
     const { result, repairs } = importDocumentDetailed(text);
@@ -373,7 +431,11 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
   const deleteAllData = useCallback(async (): Promise<SaveResult> => {
     clearTimers();
     const result = await config.api.deleteAccountData();
-    if (!result.ok) return { ok: false, notice: `Your data was not deleted: ${result.message}` };
+    if (!live()) return result.ok ? { ok: true, notice: null } : { ok: false, notice: `Your data was not deleted: ${result.message}` };
+    if (!result.ok) {
+      if (result.kind === 'accountChanged') (callbacks.current.onAccountChanged ?? callbacks.current.onUnauthorized)?.();
+      return { ok: false, notice: `Your data was not deleted: ${result.message}` };
+    }
     deletedRef.current = true;
     clearCachedCopy(config.userId, config.cache);
     history.clear();
@@ -383,7 +445,7 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
     load(fresh);
     callbacks.current.onAccountDeleted?.();
     return { ok: true, notice: null };
-  }, [config, clearTimers, history, load]);
+  }, [config, clearTimers, history, live, load]);
 
   const store = useMemo<PlannerStore>(() => ({
     document: core.document,
@@ -406,5 +468,5 @@ export function useServerPlannerDocument(options: ServerStoreOptions, loaded: Lo
     if (inFlightRef.current) await inFlightRef.current;
   }, [flush]);
 
-  return { store, flush: flushAll };
+  return { store, flush: flushAll, isDirty };
 }

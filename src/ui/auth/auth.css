@@ -1,7 +1,4 @@
-/* US-1201 sign-in, account header and device-plan prompt. */
-.public-page { max-width: 1080px; margin: 0 auto; padding: 0 20px 24px; }
-.public-header { flex-direction: column; align-items: flex-start; gap: 2px; }
-.public-signin { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 16px 0 8px; }
+/* Optional Google sign-in: sign-in button, notices and the header account menu. */
 .signin-button { gap: 10px; }
 .signin-button__logo { background: #fff; border-radius: 50%; padding: 2px; width: 22px; height: 22px; flex: none; }
 .auth-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
@@ -9,6 +6,9 @@
 .auth-setup { padding: 14px 16px; border: 1px solid var(--warn-line); background: var(--warn-soft); color: var(--warn-ink); border-radius: 8px; overflow-wrap: anywhere; }
 .auth-setup h3 { margin: 0 0 6px; font-size: 1.05rem; }
 .auth-setup code { font-size: 0.9em; }
+/* Standalone page frame and highlighted panel (used by GuestPlanChoice). */
+.public-page { max-width: 1080px; margin: 0 auto; padding: 0 20px 24px; }
+.public-header { flex-direction: column; align-items: flex-start; gap: 2px; }
 .device-plan { margin: 12px 0; padding: 16px 18px; border: 2px solid var(--accent); border-radius: var(--radius); background: var(--surface); }
 .device-plan h2 { margin: 0 0 6px; font-size: 1.15rem; }
 @media (max-width: 600px) {
@@ -26,3 +26,13 @@
 .account-menu__panel li button:hover { background: var(--accent-soft); }
 @media (max-width: 560px) { .account-menu__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } }
 @media print { .account-menu { display: none; } }
+.account-menu__hint { display: block; margin: 0 8px 6px; font-size: 0.85rem; color: var(--ink-2); }
+.account-menu__panel li button:disabled { color: var(--ink-2); cursor: not-allowed; }
+
+/* Guest mode: introduction actions and non-blocking sign-in notices. */
+.guest-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 16px 0 4px; }
+.guest-actions .signin-button { font-weight: 500; }
+.guest-save-note { margin: 8px 0 0; color: var(--ink-2); }
+.guest-notice { margin: 0 0 12px; }
+.guest-notice details { flex-basis: 100%; }
+.guest-notice code { font-size: 0.9em; overflow-wrap: anywhere; }

@@ -4,19 +4,21 @@ Author: Bradley J. Elder · Version 0.2 (Draft) · Date October 16, 2026 · Stat
 
 > Saved verbatim in substance from the requirements the user supplied on 2026-10-16. Section 13 (October 16
 > scope update) supersedes conflicting earlier assumptions (local-only/account-free storage, automatically
-> expiring undo, calendar-year grouping, federal-tool implementation). `docs/REQUIREMENTS.md` is v0.1.
+> expiring undo, calendar-year grouping, federal-tool implementation). Section 15 (October 19, optional Google
+> sign-in) supersedes every requirement that Google sign-in is needed to create, edit or calculate a plan.
+> `docs/REQUIREMENTS.md` is v0.1.
 
 ## 1. Purpose
 ### 1.1 Problem statement
 Self-funded students can't easily see how today's borrowing, income, and aid decisions affect when they'll be debt-free. Existing tools split "how much to borrow" and "how fast can I repay" into separate calculators and force users to recalculate from scratch whenever their situation changes.
 ### 1.2 Product vision
-DebtNav answers two questions: (1) how much do I need to borrow for college? (2) when will I be debt-free given my loans, earnings and chosen payments? It has four primary destinations: Introduction (sign-in), College Costs, Loan Amounts and Results. Results is the single place to understand and adjust repayment (see §14, which supersedes earlier navigation requirements).
+DebtNav answers two questions: (1) how much do I need to borrow for college? (2) when will I be debt-free given my loans, earnings and chosen payments? It has four primary destinations: Introduction, College Costs, Loan Amounts and Results. Results is the single place to understand and adjust repayment (see §14, which supersedes earlier navigation requirements).
 ### 1.3 Goals
 - G1: Easily calculate annual school costs minus non-loan resources, loan funding already allocated, and additional funding still needed.
 - G2: Easily calculate repayment duration, debt-free date, and interest from loans and the chosen monthly payment.
 - G3: Calculate the monthly payment needed to meet a user-selected payoff date or duration.
 - G4: Clearly identify missing information and link directly to its input.
-- G5: Save authenticated users' plans securely across sessions and devices.
+- G5: Let anyone plan without an account (saved on their browser when possible); save signed-in users' plans securely across sessions and devices (§15).
 ### 1.4 Non-goals
 - Recommending, ranking, or linking to specific lenders.
 - Telling users how much they should borrow. The app calculates; the user decides.
@@ -25,7 +27,7 @@ DebtNav answers two questions: (1) how much do I need to borrow for college? (2)
 ## 2. Scope (MoSCoW summary)
 | Priority | Included |
 |---|---|
-| Must | Plan setup, per-year costs, aid and income, borrowing gap, loans (federal subsidized/unsubsidized, private), in-school interest accrual, repayment projection, avalanche and snowball strategies, instant recalculation, Google sign-in, authenticated server persistence, Excel template/import/export, target-payoff payment calculation, academic-year loan assignment, persistent undo |
+| Must | Plan setup, per-year costs, aid and income, borrowing gap, loans (federal subsidized/unsubsidized, private), in-school interest accrual, repayment projection, avalanche and snowball strategies, instant recalculation, guest planning without an account, optional Google sign-in, authenticated server persistence, Excel template/import/export, target-payoff payment calculation, academic-year loan assignment, persistent undo |
 | Should | Life events, custom payoff order, strategy comparison, scenarios (conservative vs. expected), balance-over-time chart, export/import |
 | Could | Debt-to-earnings check via College Scorecard API, print view |
 | Won't (v1) | Lender rankings, bank syncing, mobile native app; federal tools deferred behind Coming soon |
@@ -127,7 +129,7 @@ Each story has an ID, priority, and acceptance criteria. Labels: epic:<name>, pr
 - **US-902 Year summary table (Must).** Per-year cost, resources, gap, amount borrowed.
 
 ### Epic 10: Data Persistence
-- **US-1001 Account-based automatic saving (Must).** Google authentication is required to create and persist an owned plan. Save validated input changes to the authenticated user's server-side plan, with visible saving/saved/offline/error states and retries. Returning users and users on another device recover their latest saved plans. Local cache is optional and never presented as a successful server save. Prevent cross-account cache leakage. Resolve concurrent updates through explicit version checks and conflict handling rather than silent overwrite.
+- **US-1001 Account-based automatic saving (Must).** *First sentence superseded by §15 (US-1501, US-1502): no sign-in is needed to create or edit a plan; guests save on their browser, signed-in users save to their account.* ~~Google authentication is required to create and persist an owned plan.~~ Save validated input changes to the authenticated user's server-side plan, with visible saving/saved/offline/error states and retries. Returning users and users on another device recover their latest saved plans. Local cache is optional and never presented as a successful server save. Prevent cross-account cache leakage. Resolve concurrent updates through explicit version checks and conflict handling rather than silent overwrite.
 - **US-1002 Export and import (Should).** Versioned JSON export. Invalid/older files show a clear error or migrate; never corrupt the current plan.
 - **US-1003 Delete my data (Must).** Confirm destructive deletion and remove the user's server records and local caches. Explain deletion scope and documented backup-retention behavior. Sign-out alone does not delete saved plans.
 
@@ -248,11 +250,11 @@ Implements revised US-102 with separate voluntary start and estimated required-p
 - Results identify missing inputs with direct links; a valid entered zero is not missing.
 
 ### US-1201: Google sign-in and account ownership (Must)
-- Users sign in with Google before creating an owned plan; public Overview accessible without login.
+- *Superseded by §15 (US-1501):* ~~Users sign in with Google before creating an owned plan; public Overview accessible without login.~~ Sign-in is optional: it is needed only to save a plan to an account. The whole planner works without it.
 - Sign-in, callback, session restoration, sign-out, cancellation and authentication failures.
 - Maintained OpenID Connect/auth tooling with server-validated identity, state/nonce/PKCE and secure sessions; no custom OAuth cryptography.
 - Users access only their own records, including imports, exports and nested entities; enforced on every backend route.
-- Existing local plans offered for explicit migration after login; never automatically attach another user's cached plan.
+- Existing local plans offered for explicit migration after login; never automatically attach another user's cached plan. *Detailed by §15 (US-1503): the browser's guest plan is offered, never uploaded or merged without an explicit choice.*
 - Document credential setup and redirect URLs. Missing credentials produce a clear setup state, not fake authentication.
 
 ### US-1202: Hosted backend and durable database (Must)
@@ -278,7 +280,7 @@ DebtNav is refocused on borrowing needs and the debt-free date. This section sup
 - Short labels, at most one line of helper text per field, progressive disclosure; no setup wizard. Works with keyboard, at 360 px and at 200% zoom without horizontal scrolling.
 
 ### US-1302: Introduction (Must)
-- Public page: one-sentence description of the two questions and Sign in with Google.
+- *Superseded by §15 (US-1501):* ~~Public page: one-sentence description of the two questions and Sign in with Google.~~ Everyone sees a guest-friendly introduction with **Start planning** as the primary action and **Sign in with Google to save across devices** as a secondary action. It is not a login screen.
 - Signed in: short introduction and a clear action to start or resume the plan. No detailed results or calculations.
 
 ### US-1303: College Costs (Must)
@@ -301,3 +303,40 @@ DebtNav is refocused on borrowing needs and the debt-free date. This section sup
 - The full table ends at the projected payoff, including a partial final year. Choosing fewer years never changes the calculated payoff. If payoff is not reached within the simulation limit, the table says so and shows the remaining balance instead of a date.
 - The monthly schedule stays available but secondary.
 
+
+## 15. October 19 update: optional Google sign-in (supersedes login-required requirements)
+Google sign-in becomes optional. Everyone can use every planning and calculation feature without an account; signing in adds saving to an account and access from other devices. This section supersedes the first bullet of US-1201, the public-page bullet of US-1302, the first sentence of US-1001, and any other wording that requires sign-in before creating, editing or calculating a plan. Calculations, academic-year loan assignments, import/export formats and the four-destination interface (§14) are unchanged. Server-side authorization is unchanged: every account endpoint still requires a session.
+
+### US-1501: Guest planning (Must)
+- College Costs, Loan Amounts, Results and all their editing controls work without sign-in. The Introduction is a guest-friendly welcome, not a login screen: **Start planning** is the primary action and **Sign in with Google to save across devices** is secondary (disabled, with an explanation, when sign-in is not set up or the server is unreachable).
+- A guest plan is saved in this browser's local storage when it is available and the status says exactly: "Saved on this browser. Sign in to access your plan on other devices."
+- If storage is unavailable or a save fails (private browsing, blocked site data, full quota, over 5 MB), the app keeps working and says truthfully that changes are not saved; it never claims a guest plan is saved when it is not.
+- JSON export and import work for guests. Excel template/import/export stay account-only because they run on the server; guests are told they need an account and nothing is uploaded.
+- Guest mode never creates a server-side plan and never sends guest financial inputs to the server for persistence (no `/api/plan` or `/api/workbook` requests).
+- The guest account menu shows "Not signed in (guest)" and holds Your data, Undo history, About these estimates and Sign in with Google; there is no Sign out. A guest's Delete removes only the plan saved on this browser.
+- Guest mode is also used when sign-in is not configured on the server, when the authentication service is unreachable, and when an account plan cannot be loaded and the user chooses to continue with this browser's plan. Authentication problems are shown as non-blocking notices.
+
+### US-1502: Optional Google sign-in and account saving (Must)
+- Existing Google authentication, accounts and saved plans are preserved without migration.
+- Signed-in users save to their account and recover the plan on other devices. Status text distinguishes browser saving ("Saved on this browser…") and pending edits ("Saving on this browser…" vs "Changes not yet saved to your account…") from account saving ("Saving to your account…", "Saved to your account."), and shows accurate offline, failed and conflict states.
+- Sign-in or cloud-save failures never block calculations and never discard unsaved edits.
+- Each browser tab pins its account requests to the signed-in user (`X-DebtNav-User`); if the session now belongs to a different user the server answers `409 accountChanged` and nothing is written.
+
+### US-1503: Guest-to-account transition (Must)
+- The guest plan is preserved through the sign-in redirect, cancellation and failure. Before leaving for Google the guest plan is written to the browser; if it cannot be saved the user is warned and can export it, sign in anyway or cancel.
+- Signing in never uploads guest data by itself. If the browser holds a non-default guest plan, the user chooses before the account plan loads:
+  - account has no plan: **Save this plan to my account** or **Not now — keep it on this browser**;
+  - account already has a plan: **Open my account plan** (default) or **Replace my account plan with this browser's plan…**, which requires an explicit confirmation ("Replace account plan"). Plans are never merged.
+- DebtNav stores one plan per account, so "save the guest plan separately" is not offered.
+- Only a changed (non-default) guest plan is offered. After Open or Not now, the browser remembers a fingerprint of that exact draft (no plan data) and does not ask again; editing the guest plan later makes it a new draft that is offered at the next sign-in. Unsynced account edits restored from this browser take priority, and no offer is made that time. If the account cannot be checked, the user can try again or continue without copying (asked again next sign-in).
+- A replacement is saved against the loaded revision, so a newer account version produces a conflict choice instead of an overwrite. The guest copy is removed only after the server confirms the save; after Open or Not now it stays on the browser.
+- Late responses from an earlier session or another account can never overwrite the selected plan or save to the wrong account.
+
+### US-1504: Sign-out (Must)
+- Sign-out first tries to save pending account edits (up to 5 seconds). If they are still not saved (pending, offline, failed or in conflict), it asks: sign out anyway (unsaved changes are discarded), export a copy (downloads JSON and keeps the dialog open), or stay signed in (changes nothing).
+- Sign-out stops account saves, removes this account's local cache, removes the account plan and undo history from the screen, and returns to guest mode.
+- Account data is never copied into guest storage. A separate guest plan that existed before sign-in is shown again unchanged; otherwise a fresh plan starts.
+- Pending requests, retries and timers cannot restore account data or rewrite the cache after sign-out. Account A's data never appears for a guest or for account B.
+- If the server sign-out request fails, the user is told ("DebtNav couldn't confirm sign-out with the server…") and local account data is still cleared.
+- Session expiry (401) and an account switch in another tab also stop account saving and return to guest mode, but this account's unsynced-edit cache is kept so the edits return only when the same user signs in again; it is never shown to a guest or another account. Deleting account data removes it.
+- Other open tabs learn about a sign-out through a `debtnav.authSignal` storage event (a timestamp only) and re-check the session; without working local storage they find out on their next request.

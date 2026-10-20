@@ -1,64 +1,159 @@
 /**
- * App shell (US-1201): signed out → public Overview + Google sign-in; sign-in not configured on the
- * server → setup screen (no fake login); signed in → the planner backed by the server store.
+ * App shell: Google sign-in is optional (docs/REQUIREMENTS-v0.2.md §15). The persistence mode decides
+ * which store holds the plan:
+ * - guest (signed out, sign-in not configured, server unreachable, or account plan unavailable) →
+ *   GuestApp: the full planner saved on this browser only; nothing financial is sent to the server.
+ * - account → AccountApp: the plan is saved to the user's account. The subtree is keyed by
+ *   `${user.id}:${epoch}` and gets one AccountGuard per mount, revoked on sign-out/switch, so late
+ *   responses can't write caches or show one account's data to a guest or another account.
+ * Before the account store mounts, a guest plan in this browser is offered (never uploaded just because
+ * sign-in succeeded); see state/guestTransition.ts and GuestPlanChoice.
  */
-import { useCallback, useMemo } from 'react';
-import PlannerApp from './ui/PlannerApp';
-import { AuthError, AuthNotConfigured, DevicePlanPrompt, PublicOverview, SignInButton, SignInNotice } from './ui/auth';
-import type { AccountInfo } from './ui/auth';
+import { useCallback, useEffect, useState } from 'react';
+import GuestApp, { type GuestSignInHandle } from './GuestApp';
+import AccountApp from './AccountApp';
+import { SignInNotice } from './ui/auth';
+import { GuestPlanChoice } from './ui/auth/GuestPlanChoice';
+import { ConfirmDialog } from './ui/common/ConfirmDialog';
 import { api as defaultApi, type ApiClient, type ApiUser } from './state/api';
-import { useSession } from './state/session';
-import { clearCachedCopy, useServerPlanLoad, useServerPlannerDocument, type LoadedPlan } from './state/useServerPlannerDocument';
-import { useDevicePlanOffer } from './state/devicePlan';
+import { useSession, type Session } from './state/session';
+import { endAccountSession, useAccountGuard } from './state/signOut';
+import { useGuestPlanChoice } from './state/guestTransition';
+import type { GuestReason } from './state/persistence';
+import type { AccountGuard } from './state/accountGuard';
 
 export default function App({ client = defaultApi }: { client?: ApiClient }) {
   const session = useSession(client);
+  /** "Use this browser's plan for now" after the account plan could not be loaded (per user + epoch). */
+  const [guestFallback, setGuestFallback] = useState<string | null>(null);
+  const [unsavedHandle, setUnsavedHandle] = useState<GuestSignInHandle | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [signInBusy, setSignInBusy] = useState(false);
 
-  if (session.status === 'loading') return <p className="app-loading" role="status">Loading DebtNav…</p>;
-  if (session.status === 'notConfigured') return <AuthNotConfigured />;
-  if (session.status === 'error') return <AuthError message={session.error} onRetry={session.retry} />;
-  if (session.status === 'signedOut' || !session.user) {
+  // Coming back from Google via the back button (bfcache) must not leave the button stuck.
+  useEffect(() => {
+    const onShow = (event: PageTransitionEvent) => { if (event.persisted) setSignInBusy(false); };
+    window.addEventListener('pageshow', onShow);
+    return () => window.removeEventListener('pageshow', onShow);
+  }, []);
+
+  const goToSignIn = useCallback(() => {
+    setUnsavedHandle(null);
+    setSignInBusy(true);
+    session.signIn();
+  }, [session]);
+
+  const onSignIn = useCallback((handle: GuestSignInHandle) => {
+    if (signInBusy) return;
+    // The guest plan must survive the full-page redirect (and a cancelled or failed sign-in).
+    const { saved } = handle.flushNow();
+    if (saved) goToSignIn();
+    else { setExportMessage(null); setUnsavedHandle(handle); }
+  }, [goToSignIn, signInBusy]);
+
+  const exportPlan = useCallback(() => {
+    if (!unsavedHandle) return;
+    const result = unsavedHandle.exportJson();
+    if (!result.ok) { setExportMessage(result.errors[0]?.message ?? 'Export failed.'); return; }
+    const url = URL.createObjectURL(new Blob([result.value], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `debtnav-plan-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    setExportMessage('Plan exported as a JSON file. You can import it after signing in.');
+  }, [unsavedHandle]);
+
+  const user = session.status === 'signedIn' ? session.user : null;
+  const accountKey = user ? `${user.id}:${session.epoch}` : null;
+
+  let settled: GuestReason | null = null;
+  if (user) settled = guestFallback === accountKey ? 'accountUnavailable' : null;
+  else if (session.status === 'notConfigured') settled = 'notConfigured';
+  else if (session.status === 'error') settled = 'authUnavailable';
+  else if (session.status === 'signedOut') settled = 'signedOut';
+  // While the session is re-checked (Try again), keep showing the guest planner rather than a blank screen.
+  const [lastGuestReason, setLastGuestReason] = useState<GuestReason | null>(null);
+  const checking = session.status === 'loading';
+  if (!checking && settled !== lastGuestReason) setLastGuestReason(settled);
+  const reason = checking ? lastGuestReason : settled;
+
+  if (user && accountKey && reason === null) {
     return (
-      <PublicOverview
-        signIn={<SignInButton onSignIn={() => session.signIn('/')} />}
-        notice={session.authNotice ? <SignInNotice kind={session.authNotice} onDismiss={session.dismissNotice} /> : undefined}
+      <AccountShell
+        key={accountKey}
+        client={client}
+        user={user}
+        session={session}
+        onUseGuestPlan={() => setGuestFallback(accountKey)}
       />
     );
   }
-  // Keyed by user: a different account never sees the previous user's store, history or cache.
-  return <SignedInApp key={session.user.id} client={client} user={session.user} session={session} />;
+  if (reason === null) return <p className="app-loading" role="status">Loading DebtNav…</p>;
+
+  const notice = session.authNotice && !user
+    ? <SignInNotice kind={session.authNotice} detail={session.authNoticeDetail} onDismiss={session.dismissNotice} />
+    : undefined;
+  const onRetry = reason === 'authUnavailable' ? session.retry : reason === 'accountUnavailable' ? () => setGuestFallback(null) : undefined;
+
+  return (
+    <>
+      <GuestApp
+        key={`guest:${session.epoch}`}
+        reason={reason}
+        signInAvailable={reason === 'signedOut'}
+        onSignIn={onSignIn}
+        signInBusy={signInBusy}
+        notice={notice}
+        onRetry={onRetry}
+        errorMessage={reason === 'authUnavailable' ? session.error : null}
+      />
+      {unsavedHandle && (
+        <ConfirmDialog
+          title="Your plan isn't saved on this browser"
+          confirmLabel="Sign in anyway"
+          onConfirm={goToSignIn}
+          onCancel={() => setUnsavedHandle(null)}
+        >
+          <p>Your plan isn't saved on this browser, so it will be lost when you leave for Google sign-in. Export it first to keep a copy you can import afterwards.</p>
+          <p><button type="button" onClick={exportPlan}>Export plan</button></p>
+          {exportMessage && <p role="status">{exportMessage}</p>}
+        </ConfirmDialog>
+      )}
+    </>
+  );
 }
 
-type SessionApi = ReturnType<typeof useSession>;
+type AccountProps = { client: ApiClient; user: ApiUser; session: Session; onUseGuestPlan(): void };
 
-function SignedInApp({ client, user, session }: { client: ApiClient; user: ApiUser; session: SessionApi }) {
-  const onUnauthorized = useCallback(() => session.markSignedOut('expired'), [session]);
-  const load = useServerPlanLoad({ api: client, userId: user.id, onUnauthorized });
-  if (load.status === 'loading') return <p className="app-loading" role="status">Loading your plan…</p>;
-  if (load.status === 'error') return <AuthError message={load.message} onRetry={load.retry} />;
-  return <LoadedPlanner client={client} user={user} session={session} loaded={load.loaded} onUnauthorized={onUnauthorized} />;
+const guardIds = new WeakMap<AccountGuard, number>();
+let nextGuardId = 0;
+function guardKey(guard: AccountGuard): number {
+  let id = guardIds.get(guard);
+  if (id === undefined) { id = ++nextGuardId; guardIds.set(guard, id); }
+  return id;
 }
 
-function LoadedPlanner({ client, user, session, loaded, onUnauthorized }: {
-  client: ApiClient; user: ApiUser; session: SessionApi; loaded: LoadedPlan; onUnauthorized(): void;
-}) {
-  const onAccountDeleted = useCallback(() => session.markSignedOut('deleted'), [session]);
-  const { store, flush } = useServerPlannerDocument({ api: client, userId: user.id, onUnauthorized, onAccountDeleted }, loaded);
-  const offer = useDevicePlanOffer(store, user.id);
+/**
+ * One signed-in account session. The guard is created per mount; React StrictMode's simulated
+ * remount replaces a revoked guard, so the subtree is keyed by guard identity and anything started
+ * with a dead guard restarts with the live one.
+ */
+function AccountShell(props: AccountProps) {
+  const guard = useAccountGuard(props.user.id, props.session.epoch);
+  return <AccountSession key={guardKey(guard)} {...props} guard={guard} />;
+}
 
-  const account = useMemo<AccountInfo>(() => ({
-    email: user.email,
-    onSignOut: async () => {
-      // Save pending edits first; signing out never deletes the saved plan.
-      await flush();
-      clearCachedCopy(user.id);
-      await session.signOut();
-    },
-  }), [flush, session, user]);
+/** The guest-plan question, then the account planner. */
+function AccountSession({ client, user, session, onUseGuestPlan, guard }: AccountProps & { guard: AccountGuard }) {
+  const onUnauthorized = useCallback((kind: 'unauthorized' | 'accountChanged') => {
+    endAccountSession({ guard, session, notice: kind === 'accountChanged' ? 'accountChanged' : 'expired' });
+  }, [guard, session]);
+  const choice = useGuestPlanChoice({ client, user, guard, onUnauthorized });
 
-  const devicePlanPrompt = offer.summary
-    ? <DevicePlanPrompt summary={offer.summary} busy={offer.busy} error={offer.error} onUse={offer.use} onDismiss={offer.dismiss} />
-    : offer.error ? <p role="status" className="device-plan-error">{offer.error}</p> : undefined;
-
-  return <PlannerApp store={store} account={account} workbook={client} devicePlanPrompt={devicePlanPrompt} />;
+  if (choice.status !== 'resolved') return <GuestPlanChoice {...choice} email={user.email} />;
+  const notice = choice.notice ? <p role="status" className="device-plan-error">{choice.notice}</p> : undefined;
+  return <AccountApp client={client} user={user} session={session} guard={guard} onUseGuestPlan={onUseGuestPlan} notice={notice} />;
 }
