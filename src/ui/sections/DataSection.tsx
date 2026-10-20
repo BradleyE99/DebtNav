@@ -4,22 +4,10 @@ import { usePlanner } from '../PlannerContext';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { TableRegion } from '../common/common';
 import type { WorkbookApi, WorkbookPreview } from './dataExchange';
+import { WARN_STATES, saveStatusText } from './saveStatusText';
 import './data.css';
 
-export function saveStatusText(status: SaveStatus): string {
-  switch (status.state) {
-    case 'saved': return status.message ?? (status.savedAt ? 'All changes saved.' : 'Your plan is saved as you edit.');
-    case 'pending': return status.message ?? 'Unsaved changes…';
-    case 'saving': return status.message ?? 'Saving…';
-    case 'offline': return status.message ?? 'You\'re offline: your latest changes are not saved yet. DebtNav keeps retrying.';
-    case 'conflict': return status.message ?? 'Conflict: your plan was changed on another device or tab. Choose which version to keep.';
-    case 'error': return status.message ?? 'Error: your latest changes could not be saved. Try again, or export a copy.';
-    case 'unavailable': return status.message ?? 'Saving is unavailable right now. The app still works, but your changes will not be saved. Export a copy.';
-    case 'paused': return status.message ?? 'Saved data could not be read, so it was kept untouched and saving is paused. Import a copy or delete the saved data to continue saving.';
-  }
-}
-
-const WARN_STATES = new Set<SaveStatus['state']>(['unavailable', 'error', 'paused', 'offline', 'conflict']);
+export { saveStatusText } from './saveStatusText';
 
 /**
  * Save state (US-1001). `live` marks the single announced copy (header), which also offers Retry and
@@ -89,18 +77,14 @@ export function DataTools({ workbook, signedIn = false }: { workbook?: WorkbookA
     setDeleting(false);
     setConfirmDelete(false);
     setMessage(result.ok
-      ? (signedIn ? 'Your DebtNav data was deleted.' : 'All saved DebtNav data was deleted. A new blank plan is ready.')
+      ? (signedIn ? 'Your DebtNav data was deleted.' : 'The plan saved on this browser was deleted. A new blank plan is ready.')
       : result.notice ?? 'Your data could not be deleted. Nothing was removed; please try again.');
   }
 
   const status = store.saveStatus;
   return (
     <div id="data" className="data-tools">
-      <p className="section-intro">
-        {signedIn
-          ? 'Your plan is saved to your DebtNav account as you edit, so you can continue on any device. Export a copy as JSON or Excel at any time.'
-          : 'Your plan is saved as you edit. Export a copy as JSON at any time.'}
-      </p>
+      <p className="section-intro">{dataIntroText(signedIn, status)}</p>
       <div className="data-block">
         <h3>Saving</h3>
         <SaveStatusBadge live={false} />
@@ -132,7 +116,7 @@ export function DataTools({ workbook, signedIn = false }: { workbook?: WorkbookA
         <p className="field-hint">
           {signedIn
             ? 'Deletes your saved plan, your DebtNav account record and your sessions from DebtNav\'s servers, and clears DebtNav data cached in this browser. Signing out alone never deletes your plan.'
-            : 'Deletes your saved plan and DebtNav data cached in this browser.'}
+            : 'Deletes the plan saved on this browser. A plan saved to a DebtNav account is not affected.'}
         </p>
         <div className="button-row">
           <button type="button" className="button-danger" onClick={() => setConfirmDelete(true)}>Delete all my data</button>
@@ -142,7 +126,7 @@ export function DataTools({ workbook, signedIn = false }: { workbook?: WorkbookA
 
       {confirmDelete && (
         <ConfirmDialog
-          title={signedIn ? 'Delete your DebtNav account data?' : 'Delete all DebtNav data?'}
+          title={signedIn ? 'Delete your DebtNav account data?' : 'Delete the plan saved on this browser?'}
           confirmLabel={deleting ? 'Deleting…' : 'Delete all data'}
           destructive
           onCancel={() => { if (!deleting) setConfirmDelete(false); }}
@@ -155,7 +139,7 @@ export function DataTools({ workbook, signedIn = false }: { workbook?: WorkbookA
               <p>Deleted data is removed from the live database immediately. Encrypted database backups kept by our hosting provider may still contain it for up to 7 days, after which it is gone; backups are used only for disaster recovery.</p>
             </>
           ) : (
-            <p>This permanently removes your saved plan and DebtNav data cached in this browser. Export a backup first if you might want it later. This cannot be undone and is not part of the Undo history.</p>
+            <p>This permanently removes the plan saved on this browser. Export a backup first if you might want it later. This cannot be undone and is not part of the Undo history. A plan saved to a DebtNav account is not affected.</p>
           )}
         </ConfirmDialog>
       )}
@@ -172,6 +156,20 @@ export function DataTools({ workbook, signedIn = false }: { workbook?: WorkbookA
       )}
     </div>
   );
+}
+
+/** "Your data" introduction: says truthfully where the plan is saved (account, this browser, or nowhere). */
+export function dataIntroText(signedIn: boolean, status: SaveStatus): string {
+  if (signedIn || status.scope === 'account') {
+    return 'Your plan is saved to your DebtNav account as you edit, so you can continue on any device. Export a copy as JSON or Excel at any time.';
+  }
+  const working = status.state === 'saved' || status.state === 'pending' || status.state === 'saving';
+  if (status.scope === 'browser') {
+    return working
+      ? 'Your plan is saved on this browser as you edit. It is not sent to DebtNav\'s servers, so it is not available on other devices; sign in to access it elsewhere. Export a copy as JSON at any time.'
+      : 'Your changes are not being saved on this browser right now (see Saving below). Export a copy as JSON to keep them.';
+  }
+  return working ? 'Your plan is saved as you edit. Export a copy as JSON at any time.' : 'Your changes are not being saved right now. Export a copy as JSON to keep them.';
 }
 
 const COUNT_LABELS: [string, string][] = [
@@ -195,7 +193,7 @@ function ExcelExchange({ workbook, onMessage }: { workbook?: WorkbookApi; onMess
     return (
       <div className="data-block">
         <h3>Excel file</h3>
-        <p className="field-hint">Excel templates, export and import need a signed-in DebtNav account. JSON export and import work here.</p>
+        <p className="field-hint">Excel needs an account: Excel templates, export and import work only when you sign in with Google. JSON export and import work without an account.</p>
       </div>
     );
   }

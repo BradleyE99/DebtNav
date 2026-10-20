@@ -273,3 +273,57 @@ describe('usePlannerDocument', () => {
     expect(storage.data.has(STORAGE_KEY)).toBe(false);
   });
 });
+
+describe('guest store: browser scope and flushNow (optional sign-in)', () => {
+  it('marks every status as browser-scoped', () => {
+    const storage = memory();
+    const { result } = renderHook(() => usePlannerDocument({ storage }));
+    expect(result.current.saveStatus.scope).toBe('browser');
+    act(() => { result.current.updatePlan(setSalary('1.00')); });
+    expect(result.current.saveStatus).toMatchObject({ state: 'pending', scope: 'browser' });
+    act(() => { vi.runAllTimers(); });
+    expect(result.current.saveStatus).toMatchObject({ state: 'saved', scope: 'browser' });
+  });
+
+  it('flushNow writes pending edits immediately and reports saved', () => {
+    const storage = memory();
+    const { result } = renderHook(() => usePlannerDocument({ storage }));
+    act(() => { result.current.updatePlan(setSalary('7.00')); });
+    expect(storage.writes).toBe(0);
+    let outcome!: { saved: boolean };
+    act(() => { outcome = result.current.flushNow(); });
+    expect(outcome).toEqual({ saved: true });
+    expect(storage.writes).toBe(1);
+    expect(storedPlan(storage).postGradIncome.annualSalary).toBe('7.00');
+    act(() => { vi.runAllTimers(); });
+    expect(storage.writes).toBe(1);
+    // Nothing pending: still saved, nothing written.
+    act(() => { outcome = result.current.flushNow(); });
+    expect(outcome).toEqual({ saved: true });
+    expect(storage.writes).toBe(1);
+  });
+
+  it('flushNow reports not saved when storage rejects writes (quota) and keeps the edits', () => {
+    const storage = memory();
+    const { result } = renderHook(() => usePlannerDocument({ storage }));
+    storage.setItem = () => { throw new DOMException('full', 'QuotaExceededError'); };
+    act(() => { result.current.updatePlan(setSalary('9.00')); });
+    let outcome!: { saved: boolean };
+    act(() => { outcome = result.current.flushNow(); });
+    expect(outcome).toEqual({ saved: false });
+    expect(result.current.saveStatus).toMatchObject({ state: 'unavailable', scope: 'browser' });
+    expect(result.current.document.plan.postGradIncome.annualSalary).toBe('9.00');
+    // A second flush with no new edit still reports not saved.
+    act(() => { outcome = result.current.flushNow(); });
+    expect(outcome).toEqual({ saved: false });
+  });
+
+  it('flushNow reports not saved when browser storage is unavailable from the start', () => {
+    const unavailable: StorageLike = { getItem: () => null, setItem: () => { throw new Error('denied'); }, removeItem: () => {} };
+    const { result } = renderHook(() => usePlannerDocument({ storage: unavailable }));
+    expect(result.current.saveStatus).toMatchObject({ state: 'unavailable', scope: 'browser' });
+    let outcome!: { saved: boolean };
+    act(() => { outcome = result.current.flushNow(); });
+    expect(outcome).toEqual({ saved: false });
+  });
+});

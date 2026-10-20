@@ -56,8 +56,8 @@ If you already created a web service by hand (the one whose deploy failed), dele
    - `[api] listening on http://localhost:10000 (serving dist)`
    - No `[auth] … not set` warning. That warning means the Google variables are missing.
 2. Open `https://<service-name>.onrender.com/api/health`. It should show `{"ok":true,"db":"ok"}`.
-3. Open `https://<service-name>.onrender.com`, click **Sign in with Google**, and pick your test-user account. You land in the planner.
-4. Make an edit, wait for "All changes saved", reload, and sign in on another device. The plan is still there.
+3. Open `https://<service-name>.onrender.com`. The planner works right away as a guest (**Start planning**). Click **Sign in with Google to save across devices** and pick your test-user account. If this browser already has a guest plan, DebtNav asks whether to save it to your account; nothing is uploaded until you choose.
+4. Make an edit, wait for "Saved to your account.", reload, and sign in on another device. The plan is still there.
 
 ## Troubleshooting
 
@@ -66,7 +66,7 @@ If you already created a web service by hand (the one whose deploy failed), dele
 | Deploy fails with `Cannot find module '/app/node_modules/tsx/dist/cli.mjs'` | An older Dockerfile installed without devDependencies. Fixed: `tsx` is now a production dependency. Deploy the latest `main`. |
 | Google shows **Error 400: redirect_uri_mismatch** | The redirect URI in Google doesn't exactly match `https://<service-name>.onrender.com/api/auth/callback`. Copy the URL from Render, then fix it in Google Credentials (changes can take a few minutes to apply). |
 | Google shows **Access blocked / app not verified** for a friend | The app is in Testing mode. Add them as a test user, or publish the app. |
-| The app shows "Sign-in is not set up" | `OIDC_CLIENT_ID` or `OIDC_CLIENT_SECRET` is empty on the service. Add both and redeploy. |
+| The app shows "Sign-in isn't set up on this server" and the sign-in button is disabled (the planner still works as a guest) | `OIDC_CLIENT_ID` or `OIDC_CLIENT_SECRET` is empty on the service. Add both and redeploy. |
 | Signed in, but "Sign-in didn't work" right away | The secret is wrong or the client ID belongs to another project. Re-copy both from the same OAuth client. |
 | `/api/health` shows `db: unavailable` | `DATABASE_URL` is wrong, or the database is in a different region. Use the Internal Database URL from a database in the same region. |
 | Deploy fails with **Ran out of memory (used over 512MB)** | The service had no `DATABASE_URL`, so the server loaded the embedded database (~700 MB). Fixed: the server now refuses to start without `DATABASE_URL`. Create the Postgres database and set `DATABASE_URL` (Option A does this for you). |

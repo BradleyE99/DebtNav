@@ -372,7 +372,7 @@ describe('data and disclaimer', () => {
     navigateTo('data', true);
     const trigger = screen.getByRole('button', { name: 'Delete all my data' });
     await user.click(trigger);
-    const dialog = screen.getByRole('alertdialog', { name: 'Delete all DebtNav data?' });
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete the plan saved on this browser?' });
     const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
     const confirm = within(dialog).getByRole('button', { name: 'Delete all data' });
     expect(document.activeElement).toBe(cancel);

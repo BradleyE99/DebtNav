@@ -1,7 +1,10 @@
 /**
- * Local (device) PlannerStore: the plan lives in browser storage. Used by component tests and as a
- * development fallback; the signed-in app uses useServerPlannerDocument. Both share documentCore
- * (edits, validation, undo history).
+ * Local (browser) PlannerStore: the guest plan lives in browser storage under GUEST_PLAN_KEY (the
+ * original 'debtnav.plan' key and envelope). Used in guest mode (no sign-in) and by component tests;
+ * the signed-in app uses useServerPlannerDocument. Both share documentCore (edits, validation, undo
+ * history). Nothing here talks to the network: guest plans are never sent to the server.
+ *
+ * - Every status carries scope 'browser' so the UI distinguishes browser saving from account saving.
  *
  * - Saving is debounced and flushed on pagehide, visibilitychange → hidden, and unmount. The latest
  *   plan lives in a ref updated synchronously, so an edit immediately followed by a reload (which
@@ -32,29 +35,41 @@ interface Initial {
 
 export const freshDocument = (): PlannerDocument => ({ plan: createDefaultPlan(), disclaimerDismissed: false });
 
+const browser = (status: Omit<SaveStatus, 'scope'>): SaveStatus => ({ ...status, scope: 'browser' });
+
 function initialize(storage: StorageLike | undefined): Initial {
   const loaded = loadDocument(storage);
   if (loaded.preservedUnreadable) {
-    return { document: freshDocument(), paused: true, status: { state: 'paused', message: loaded.notice, savedAt: null } };
+    return { document: freshDocument(), paused: true, status: browser({ state: 'paused', message: loaded.notice, savedAt: null }) };
   }
   // A repaired older plan loads normally; the notice names each change. The stored text is not
   // rewritten until the user's first edit (dirty stays false), so merely opening the app changes nothing.
   const repaired = loaded.repairs.length > 0;
   if (loaded.notice && !repaired) {
-    return { document: loaded.document ?? freshDocument(), paused: false, status: { state: 'unavailable', message: loaded.notice, savedAt: null } };
+    return { document: loaded.document ?? freshDocument(), paused: false, status: browser({ state: 'unavailable', message: loaded.notice, savedAt: null }) };
   }
   // Storage that can be read but not written (private modes, full quota): say so before the first edit.
   if (!probeStorage(storage)) {
     const message = repaired ? `${loaded.notice} ${UNAVAILABLE_NOTICE}` : UNAVAILABLE_NOTICE;
-    return { document: loaded.document ?? freshDocument(), paused: false, status: { state: 'unavailable', message, savedAt: null } };
+    return { document: loaded.document ?? freshDocument(), paused: false, status: browser({ state: 'unavailable', message, savedAt: null }) };
   }
-  return { document: loaded.document ?? freshDocument(), paused: false, status: { state: 'saved', message: repaired ? loaded.notice : null, savedAt: null } };
+  return { document: loaded.document ?? freshDocument(), paused: false, status: browser({ state: 'saved', message: repaired ? loaded.notice : null, savedAt: null }) };
 }
 
 /** The local store's deletion is synchronous. */
 export type LocalPlannerStore = Omit<PlannerStore, 'deleteAllData'> & { deleteAllData(): SaveResult };
 
-export function usePlannerDocument(options: PlannerDocumentOptions = {}): LocalPlannerStore {
+/** Guest store handle (contract E). */
+export type GuestPlannerStore = LocalPlannerStore & {
+  /**
+   * Writes pending edits immediately (no debounce). `saved` is true only when the plan shown is
+   * durably stored in this browser: nothing unsaved remains and storage accepts writes. False when
+   * storage is unavailable or full, or when saving is paused with edits that were not written.
+   */
+  flushNow(): { saved: boolean };
+};
+
+export function usePlannerDocument(options: PlannerDocumentOptions = {}): GuestPlannerStore {
   // Options are read once; changing them after mount has no effect.
   const [config] = useState(() => ({
     storage: options.storage,
@@ -67,28 +82,37 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): LocalP
   const dirtyRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestRef = useRef<PlannerDocument>(initial.document);
+  // Whether storage accepts writes, as last observed (initial probe, then each write).
+  const writableRef = useRef(initial.status.state !== 'unavailable');
 
-  const flush = useCallback((): void => {
+  /** Writes pending edits now. Returns true when nothing unsaved remains in working storage. */
+  const flush = useCallback((): boolean => {
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    if (!dirtyRef.current || pausedRef.current) return;
+    if (pausedRef.current) return !dirtyRef.current;
+    if (!dirtyRef.current) return writableRef.current;
     const result = saveDocumentDetailed(latestRef.current, config.storage);
     if (result.ok) {
       dirtyRef.current = false;
-      setSaveStatus({ state: 'saved', message: null, savedAt: new Date().toISOString() });
-    } else {
-      // Keep the document dirty so a later edit or flush retries.
-      setSaveStatus(previous => ({ state: result.reason === 'storage' ? 'unavailable' : 'error', message: result.notice, savedAt: previous.savedAt }));
+      writableRef.current = true;
+      setSaveStatus(browser({ state: 'saved', message: null, savedAt: new Date().toISOString() }));
+      return true;
     }
+    // Keep the document dirty so a later edit or flush retries.
+    if (result.reason === 'storage') writableRef.current = false;
+    setSaveStatus(previous => browser({ state: result.reason === 'storage' ? 'unavailable' : 'error', message: result.notice, savedAt: previous.savedAt }));
+    return false;
   }, [config]);
+
+  const flushNow = useCallback((): { saved: boolean } => ({ saved: flush() }), [flush]);
 
   const onChange = useCallback((next: PlannerDocument): void => {
     latestRef.current = next;
     dirtyRef.current = true;
     if (pausedRef.current) return;
-    setSaveStatus(previous => (previous.state === 'pending' ? previous : { state: 'pending', message: null, savedAt: previous.savedAt }));
+    setSaveStatus(previous => (previous.state === 'pending' ? previous : browser({ state: 'pending', message: null, savedAt: previous.savedAt })));
     if (timerRef.current !== null) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(flush, config.debounceMs);
   }, [config, flush]);
@@ -96,7 +120,7 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): LocalP
   const core = useDocumentCore({ initialDocument: initial.document, onChange });
 
   useEffect(() => {
-    const onPageHide = () => flush();
+    const onPageHide = () => { flush(); };
     const onVisibility = () => {
       if (window.document.visibilityState === 'hidden') flush();
     };
@@ -121,7 +145,7 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): LocalP
     if (repairs.length) {
       // Keep the save outcome (saved / unavailable) and prepend what was changed to make the file projectable.
       const repairText = repairs.join(' ');
-      setSaveStatus(previous => ({ ...previous, message: previous.message ? `${repairText} ${previous.message}` : repairText }));
+      setSaveStatus(previous => browser({ ...previous, message: previous.message ? `${repairText} ${previous.message}` : repairText }));
     }
     return result;
   }, [coreReplace, flush]);
@@ -140,7 +164,7 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): LocalP
     }
     const result = deleteDocument(config.storage);
     if (!result.ok) {
-      setSaveStatus(previous => ({ state: 'unavailable', message: result.notice, savedAt: previous.savedAt }));
+      setSaveStatus(previous => browser({ state: 'unavailable', message: result.notice, savedAt: previous.savedAt }));
       return result;
     }
     const fresh = freshDocument();
@@ -149,11 +173,12 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): LocalP
     dirtyRef.current = false;
     load(fresh);
     history.clear();
-    setSaveStatus({ state: 'saved', message: 'Your saved data was deleted from this device.', savedAt: null });
+    writableRef.current = true;
+    setSaveStatus(browser({ state: 'saved', message: 'Your saved data was deleted from this device.', savedAt: null }));
     return result;
   }, [config, load, history]);
 
-  return useMemo<LocalPlannerStore>(() => ({
+  return useMemo<GuestPlannerStore>(() => ({
     document: core.document,
     updatePlan: core.updatePlan,
     dismissDisclaimer: core.dismissDisclaimer,
@@ -165,5 +190,6 @@ export function usePlannerDocument(options: PlannerDocumentOptions = {}): LocalP
     replaceDocument,
     exportJson,
     deleteAllData,
-  }), [core.document, core.updatePlan, core.dismissDisclaimer, saveStatus, core.history, core.undo, core.markUndoable, importText, replaceDocument, exportJson, deleteAllData]);
+    flushNow,
+  }), [core.document, core.updatePlan, core.dismissDisclaimer, saveStatus, core.history, core.undo, core.markUndoable, importText, replaceDocument, exportJson, deleteAllData, flushNow]);
 }

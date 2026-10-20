@@ -1,6 +1,6 @@
 # DebtNav backend: setup, deployment and operations
 
-This covers US-1201 (Google sign-in) and US-1202 (hosted backend and durable database). The API lives in `server/`. It is a Hono app on Node, and it shares validation and contracts with the browser via `src/data` and `src/engine`. Configuration comes from environment variables only (see [`.env.example`](../.env.example) and `server/src/config.ts`).
+This covers US-1201 (Google sign-in), US-1202 (hosted backend and durable database) and the optional-sign-in rules of US-1501–US-1504. Sign-in is optional: guests use the whole planner without the backend storing anything, and the backend is needed only for account saving and Excel exchange. The API lives in `server/`. It is a Hono app on Node, and it shares validation and contracts with the browser via `src/data` and `src/engine`. Configuration comes from environment variables only (see [`.env.example`](../.env.example) and `server/src/config.ts`).
 
 ## Local setup
 
@@ -15,7 +15,7 @@ This covers US-1201 (Google sign-in) and US-1202 (hosted backend and durable dat
    - Authorized redirect URI: `http://localhost:5173/api/auth/callback`
    - Put the client ID and secret in `.env` as `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET`.
 
-   Without them the API still runs. The app shows a "sign-in is not set up" screen and never fakes authentication.
+   Without them the API still runs. The planner works in guest mode (saved on this browser only), shows the non-blocking notice "Sign-in isn't set up on this server. Your plan is saved on this browser only." (or, when browser storage is unavailable, that changes are not saved), disables the sign-in button with an explanation, and never fakes authentication. If the API itself is unreachable, the planner also stays usable in guest mode.
 4. Start the API with `npm run dev:api` (it loads `.env` when present). Migrations apply at startup.
 5. Start the app with `npm run dev`. Vite proxies `/api` to `API_PORT`, so the app and the cookie share one origin.
 
@@ -25,8 +25,10 @@ This covers US-1201 (Google sign-in) and US-1202 (hosted backend and durable dat
 
 - **Sign-in:** OpenID Connect authorization-code flow with PKCE, `state` and `nonce` via `openid-client` (no custom OAuth cryptography). Login state is stored server-side in `oidc_flows`, is single-use, and expires after 10 minutes. The ID token is validated by the library; users are keyed by `(issuer, subject)`.
 - **Sessions:** a random token in an `httpOnly`, `SameSite=Lax` cookie. Only its SHA-256 hash is stored (`sessions`). Over HTTPS the cookie is `Secure` and uses the `__Host-` prefix. Expired sessions are purged hourly.
-- **Ownership:** every `/api` route except `health` and `auth/config|login|callback` requires a session. The owner is always the session user and never a request parameter, so a user can reach only their own plan, imports and exports. `server/test/authz.test.ts` covers cross-user access.
+- **Ownership:** every `/api` route except `health` and `auth/config|login|callback|logout` requires a session; making the planner pages public did not make any API route public. The owner is always the session user and never a request parameter, so a user can reach only their own plan, imports and exports. `server/test/authz.test.ts` covers cross-user access.
 - **Writes:** `PUT /api/plan` carries `baseRevision`. A stale revision gets `409` and the client asks the user which version to keep; nothing is silently overwritten. Every state-changing request must send `X-Requested-With: debtnav` (CSRF guard). Bodies are capped at 5 MB, and requests are rate limited per client IP (first `X-Forwarded-For` hop), so deploy behind a proxy that sets that header.
+- **Account pinning:** the client sends `X-DebtNav-User: <user id>` on account requests. If the session cookie now belongs to a different user (for example, another tab switched accounts), `requireUser` answers `409 {"error":"accountChanged"}` and nothing is read or written; the client stops saving, keeps edits in memory and re-checks `/api/me`. Requests without the header behave as before. Excel template and export are plain download links, so they carry the session cookie but not this header.
+- **Guests:** guest plans live only in the browser's `localStorage` (`debtnav.plan`). Guest mode makes no `/api/plan` or `/api/workbook` requests and the server never creates a plan for a guest. A guest plan reaches the server only when a signed-in user explicitly chooses to save it to (or replace) their account plan.
 - **Logging:** request logs never include plan contents, financial inputs, tokens or secrets.
 - **Portable files:** JSON and Excel exports never contain account IDs, emails, tokens or secrets. Excel imports are parsed and validated server-side, and commit atomically only after explicit confirmation.
 
@@ -70,6 +72,7 @@ docker run -p 8787:8787 --env-file .env.production debtnav
 - **Backups:** use the provider's automated backups or point-in-time recovery, with retention set to **7 days**. The app's Delete-my-data screen tells users that deleted data may remain in encrypted backups for up to 7 days, so retention must not be longer.
 - **Restore:** restore into a new database instance from the provider console (or `pg_restore` from a `pg_dump -Fc` file), point `DATABASE_URL` at it and restart. Migrations are idempotent. Before switching traffic, verify with `GET /api/health` and a test sign-in. After restoring, re-run deletions requested since the backup was taken: any account that deleted its data in that window must be deleted again.
 - **Manual export:** run `pg_dump -Fc "$DATABASE_URL" > debtnav-$(date +%F).dump`. Dumps contain personal financial data: store them encrypted and delete them within the same 7 days.
+- **Browser keys:** `debtnav.plan` holds the guest plan (with legacy `debtnav.plan.v2`). `debtnav.cache.<userId>` holds unsynced edits for one signed-in account and is removed on sign-out and data deletion; after a session expiry it is kept (unsynced edits must not be lost) and restored only for the same user. `debtnav.authSignal` holds only a sign-out timestamp that tells other tabs to re-check the session. `debtnav.guestChoice.<userId>` records that the guest-plan offer was answered (no plan data). Sign-out never copies account data into `debtnav.plan`.
 - **Deletion:** `DELETE /api/account/data` removes the user's plan, sessions and account row from the live database immediately, and the client clears its local cache. Signing out alone deletes nothing.
 - **Retention:** plans are kept until the user deletes them. Sessions expire after `SESSION_TTL_DAYS`. Login state expires after 10 minutes.
 - **PGlite** (the default without `DATABASE_URL`) is for local development and tests. In production the server refuses to start without `DATABASE_URL` unless `ALLOW_EMBEDDED_DB=1`, because PGlite needs about 700 MB of memory and a container's disk is not durable. To back it up, stop the server and copy the `PGLITE_DIR` directory.

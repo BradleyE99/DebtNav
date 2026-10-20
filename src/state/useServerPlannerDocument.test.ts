@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultPlan } from '../engine/planner';
 import type { PlannerDocument, PlannerPlan, StorageLike } from '../engine/planner-contracts';
 import { createFakeApi } from './fakeApi';
+import { createApiClient } from './api';
+import { createAccountGuard } from './accountGuard';
+import { saveStatusText } from '../ui/sections/saveStatusText';
+import { UNAVAILABLE_NOTICE } from '../data/storage';
 import { cacheKey, useServerPlanLoad, useServerPlannerDocument, type LoadedPlan, type ServerStoreOptions } from './useServerPlannerDocument';
 
 function memory(): StorageLike & { data: Map<string, string> } {
@@ -225,5 +229,153 @@ describe('server store: account deletion (US-1003)', () => {
     expect(outcome.notice).toMatch(/not deleted/);
     expect(onAccountDeleted).not.toHaveBeenCalled();
     expect(fake.server.document).not.toBeNull();
+  });
+});
+
+describe('optional sign-in: account scope, guard and account pinning', () => {
+  it('every status is scoped to the account and uses account wording', async () => {
+    const fake = createFakeApi({ document: docWithBudget('100.00') });
+    const { live } = await open(fake);
+    expect(live.result.current.store.saveStatus.scope).toBe('account');
+    expect(saveStatusText(live.result.current.store.saveStatus)).toBe('Saved to your account.');
+    let release!: () => void;
+    fake.server.gate = new Promise(resolve => { release = resolve; });
+    act(() => { live.result.current.store.updatePlan(setBudget('200.00')); });
+    await waitFor(() => expect(live.result.current.store.saveStatus.state).toBe('saving'));
+    expect(live.result.current.store.saveStatus.scope).toBe('account');
+    expect(saveStatusText(live.result.current.store.saveStatus)).toBe('Saving to your account…');
+    fake.server.gate = null;
+    await act(async () => { release(); });
+    await waitFor(() => expect(live.result.current.store.saveStatus).toMatchObject({ state: 'saved', scope: 'account' }));
+    fake.server.offline = true;
+    act(() => { live.result.current.store.updatePlan(setBudget('300.00')); });
+    await waitFor(() => expect(live.result.current.store.saveStatus).toMatchObject({ state: 'offline', scope: 'account' }));
+    expect(saveStatusText(live.result.current.store.saveStatus)).not.toMatch(/^Saved/);
+    expect(live.result.current.isDirty()).toBe(true);
+  });
+
+  it('a save response that arrives after the guard is revoked is dropped: no status, cache or callbacks', async () => {
+    const fake = createFakeApi({ document: docWithBudget('100.00') });
+    const cache = memory();
+    const guard = createAccountGuard('user-1', 1);
+    const onUnauthorized = vi.fn();
+    const { live } = await open(fake, { cache, guard, onUnauthorized });
+    let release!: () => void;
+    fake.server.gate = new Promise(resolve => { release = resolve; });
+    act(() => { live.result.current.store.updatePlan(setBudget('200.00')); });
+    await waitFor(() => expect(live.result.current.store.saveStatus.state).toBe('saving'));
+    // Sign-out happens while the save is in flight; the caches are cleared.
+    guard.revoke();
+    cache.data.clear();
+    fake.server.failWith = 'unauthorized';
+    fake.server.gate = null;
+    await act(async () => { release(); await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(live.result.current.store.saveStatus.state).toBe('saving');
+    expect(cache.data.size).toBe(0);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    // Further edits neither save nor cache.
+    act(() => { live.result.current.store.updatePlan(setBudget('300.00')); });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(fake.server.calls.filter(call => call.startsWith('savePlan'))).toEqual(['savePlan:1']);
+    expect(cache.data.size).toBe(0);
+  });
+
+  it('revoking cancels a pending debounced save and the unmount flush, and pagehide writes nothing', async () => {
+    const fake = createFakeApi({ document: docWithBudget('100.00') });
+    const cache = memory();
+    const guard = createAccountGuard('user-1', 1);
+    const { live } = await open(fake, { cache, guard, debounceMs: 1000 });
+    act(() => { live.result.current.store.updatePlan(setBudget('200.00')); });
+    guard.revoke();
+    cache.data.clear();
+    window.dispatchEvent(new Event('pagehide'));
+    live.unmount();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(fake.server.calls.filter(call => call.startsWith('savePlan'))).toEqual([]);
+    expect(cache.data.size).toBe(0);
+  });
+
+  it('a load that finishes after revocation never becomes ready or calls back', async () => {
+    const fake = createFakeApi({ document: docWithBudget('100.00') });
+    const guard = createAccountGuard('user-1', 1);
+    fake.server.failWith = 'unauthorized';
+    const onUnauthorized = vi.fn();
+    const loader = renderHook(() => useServerPlanLoad({ api: fake.api, userId: 'user-1', cache: memory(), guard, onUnauthorized }));
+    guard.revoke();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(loader.result.current.status).toBe('loading');
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('a pinned client refuses another account: saving is blocked, edits stay in memory, nothing is cached or written', async () => {
+    const fake = createFakeApi({ document: docWithBudget('100.00') });
+    const cache = memory();
+    const onAccountChanged = vi.fn();
+    const onUnauthorized = vi.fn();
+    const { live } = await open(fake, { api: fake.api.forUser('user-1'), cache, onAccountChanged, onUnauthorized });
+    // Another tab signs in as someone else.
+    fake.server.user = { id: 'user-2', email: 'bob@example.test' };
+    act(() => { live.result.current.store.updatePlan(setBudget('555.00')); });
+    await waitFor(() => expect(onAccountChanged).toHaveBeenCalledTimes(1));
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    expect(live.result.current.store.saveStatus).toMatchObject({ state: 'error', scope: 'account' });
+    expect(live.result.current.store.saveStatus.message).toMatch(/another tab/);
+    expect(live.result.current.store.document.plan.postGradIncome.monthlyDebtBudget).toBe('555.00');
+    expect(fake.server.document?.plan.postGradIncome.monthlyDebtBudget).toBe('100.00');
+    expect(cache.getItem(cacheKey('user-1'))).toBeNull();
+    // Blocked: further edits do not try again.
+    act(() => { live.result.current.store.updatePlan(setBudget('556.00')); });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(fake.server.calls.filter(call => call.startsWith('savePlan'))).toEqual(['savePlan:1']);
+  });
+
+  it('a pinned load while another account is signed in reports accountChanged (falls back to onUnauthorized)', async () => {
+    const fake = createFakeApi({ document: docWithBudget('100.00'), user: { id: 'user-2', email: null } });
+    const onUnauthorized = vi.fn();
+    const loader = renderHook(() => useServerPlanLoad({ api: fake.api.forUser('user-1'), userId: 'user-1', cache: memory(), onUnauthorized }));
+    await waitFor(() => expect(loader.result.current.status).toBe('error'));
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('api client account pinning (X-DebtNav-User)', () => {
+  const recorder = (status: number, body: unknown) => {
+    const seen: Headers[] = [];
+    const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers));
+      return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    return { seen, fetchFn };
+  };
+
+  it('forUser sends the header on every request; the unpinned client never does', async () => {
+    const { seen, fetchFn } = recorder(200, { document: null, revision: 1, updatedAt: null });
+    const client = createApiClient({ fetch: fetchFn });
+    await client.loadPlan();
+    const pinned = client.forUser('u-1');
+    await pinned.loadPlan();
+    await pinned.savePlan(docWithBudget('1.00'), null);
+    await pinned.deleteAccountData();
+    expect(seen[0].get('X-DebtNav-User')).toBeNull();
+    expect(seen.slice(1).map(headers => headers.get('X-DebtNav-User'))).toEqual(['u-1', 'u-1', 'u-1']);
+  });
+
+  it('409 accountChanged is its own failure kind, distinct from a revision conflict', async () => {
+    const changed = createApiClient({ fetch: recorder(409, { error: 'accountChanged' }).fetchFn }).forUser('u-1');
+    expect(await changed.savePlan(docWithBudget('1.00'), 1)).toMatchObject({ ok: false, kind: 'accountChanged' });
+    expect(await changed.loadPlan()).toMatchObject({ ok: false, kind: 'accountChanged' });
+    const conflict = createApiClient({ fetch: recorder(409, { error: 'conflict', serverRevision: 4 }).fetchFn }).forUser('u-1');
+    expect(await conflict.savePlan(docWithBudget('1.00'), 1)).toMatchObject({ ok: false, kind: 'conflict', serverRevision: 4 });
+  });
+});
+
+describe('save status wording by scope', () => {
+  it('browser wording never claims saved when storage is unavailable or failed', () => {
+    expect(saveStatusText({ state: 'saved', message: null, savedAt: 'x', scope: 'browser' })).toBe('Saved on this browser. Sign in to access your plan on other devices.');
+    expect(saveStatusText({ state: 'unavailable', message: null, savedAt: null, scope: 'browser' })).toBe(UNAVAILABLE_NOTICE);
+    expect(saveStatusText({ state: 'error', message: null, savedAt: null, scope: 'browser' })).not.toMatch(/^Saved/);
+    expect(saveStatusText({ state: 'saved', message: null, savedAt: 'x', scope: 'account' })).toBe('Saved to your account.');
+    expect(saveStatusText({ state: 'saving', message: null, savedAt: null, scope: 'account' })).toBe('Saving to your account…');
+    expect(saveStatusText({ state: 'saved', message: null, savedAt: 'x' })).toBe('All changes saved.');
   });
 });
